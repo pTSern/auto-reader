@@ -72,6 +72,7 @@ def main():
     except Exception:
         pass
     
+    server.shutdown()
     print("\n=== ALL MEDIA SERVER TESTS PASSED! ===")
 
 if __name__ == "__main__":

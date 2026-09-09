@@ -50,28 +50,55 @@ class MediaServerHandler(BaseHTTPRequestHandler):
             return
 
         base_storage = self.storage_dir_provider() if callable(self.storage_dir_provider) else ""
-        if not base_storage or not os.path.exists(base_storage):
-            self.send_error(500, "Storage Directory Not Initialized")
-            return
+        dist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
 
-        file_path = os.path.abspath(os.path.join(base_storage, clean_path))
-        # Ensure file_path is within base_storage
-        if not file_path.startswith(os.path.abspath(base_storage)):
-            self.send_error(403, "Forbidden Path")
-            return
+        if clean_path.startswith("projects/") or clean_path.startswith("projects\\"):
+            if not base_storage or not os.path.exists(base_storage):
+                self.send_error(500, "Storage Directory Not Initialized")
+                return
+            file_path = os.path.abspath(os.path.join(base_storage, clean_path))
+            if not file_path.startswith(os.path.abspath(base_storage)):
+                self.send_error(403, "Forbidden Path")
+                return
+        else:
+            # Serve from compiled production dist/ folder
+            if clean_path == "" or clean_path == "index.html":
+                file_path = os.path.join(dist_dir, "index.html")
+            else:
+                file_path = os.path.abspath(os.path.join(dist_dir, clean_path))
+
+            if not os.path.exists(dist_dir) or not file_path.startswith(os.path.abspath(dist_dir)):
+                # Fallback to storage directory if not in dist
+                file_path = os.path.abspath(os.path.join(base_storage, clean_path))
 
         if not os.path.isfile(file_path):
             self.send_error(404, "File Not Found")
             return
 
         file_size = os.path.getsize(file_path)
-        content_type, _ = mimetypes.guess_type(file_path)
-        if not content_type:
-            if file_path.endswith(".mp3"):
-                content_type = "audio/mpeg"
-            elif file_path.endswith(".json"):
-                content_type = "application/json"
-            else:
+
+        # Precise MIME types to resolve Windows registry issues with .js
+        if file_path.endswith(".js") or file_path.endswith(".mjs"):
+            content_type = "text/javascript"
+        elif file_path.endswith(".css"):
+            content_type = "text/css"
+        elif file_path.endswith(".html"):
+            content_type = "text/html; charset=utf-8"
+        elif file_path.endswith(".mp3"):
+            content_type = "audio/mpeg"
+        elif file_path.endswith(".json"):
+            content_type = "application/json"
+        elif file_path.endswith(".svg"):
+            content_type = "image/svg+xml"
+        elif file_path.endswith(".png"):
+            content_type = "image/png"
+        elif file_path.endswith(".ico"):
+            content_type = "image/x-icon"
+        elif file_path.endswith(".woff2"):
+            content_type = "font/woff2"
+        else:
+            content_type, _ = mimetypes.guess_type(file_path)
+            if not content_type:
                 content_type = "application/octet-stream"
 
         range_header = self.headers.get("Range")

@@ -463,7 +463,14 @@ class DesktopApi:
         pass
 
 def main():
-    target_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5173"
+    if len(sys.argv) > 1:
+        target_url = sys.argv[1]
+    else:
+        dist_index = os.path.join(BASE_DIR, "dist", "index.html")
+        if os.path.exists(dist_index):
+            target_url = f"http://127.0.0.1:{MEDIA_PORT}/"
+        else:
+            target_url = "http://localhost:5173"
     
     # Create webview window with frameless=True for borderless desktop look.
     # easy_drag=False is CRITICAL so mouse-drag selection inside text editors works normally without dragging the window.
