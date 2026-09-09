@@ -11,8 +11,8 @@ import { StorageSettingsModal } from './components/StorageSettingsModal';
 import { LogViewerModal } from './components/LogViewerModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobilePlayerSheet } from './components/MobilePlayerSheet';
-import { ProjectData, FileReference, VoiceModel, TimedCue, ViewMode, TextChunk } from './types';
-import { getVoiceById } from './services/voicesCatalog';
+import { ProjectData, FileReference, VoiceModel, TimedCue, ViewMode, TextChunk, VoiceTrackStatus } from './types';
+import { getVoiceById, getVoiceFolderSubpath } from './services/voicesCatalog';
 import { exportToSrt } from './services/edgeTtsClient';
 import { calculateTextStats } from './services/pdfExtractor';
 import {
@@ -25,7 +25,7 @@ import {
   createDefaultProject,
 } from './services/projectStorage';
 import { DesktopBridge } from './services/desktopBridge';
-import { ChunkCoordinator } from './services/chunkingEngine';
+import { ChunkCoordinator, splitTextIntoChunks } from './services/chunkingEngine';
 import { Logger } from './services/logger';
 
 /**
@@ -84,6 +84,23 @@ export function App() {
     activeChunkId: number;
   } | null>(null);
   const [resumeNotification, setResumeNotification] = useState<string | null>(null);
+  const [voiceStatuses, setVoiceStatuses] = useState<Record<string, VoiceTrackStatus>>({});
+
+  const refreshVoiceStatuses = async (projectId: string) => {
+    if (!projectId || !DesktopBridge.isDesktop()) return;
+    try {
+      const statuses = await DesktopBridge.getProjectVoiceStatuses(projectId);
+      setVoiceStatuses(statuses);
+    } catch (e) {
+      console.warn('Failed to load voice statuses', e);
+    }
+  };
+
+  useEffect(() => {
+    if (project.id) {
+      refreshVoiceStatuses(project.id);
+    }
+  }, [project.id]);
 
   // Coordinator & Audio Element Refs
   const coordinatorRef = useRef<ChunkCoordinator | null>(null);
@@ -481,7 +498,8 @@ export function App() {
         } else if (chunk.id === currentChunkIndexRef.current + 1) {
           preloadNextChunk(chunk.id);
         }
-      }
+      },
+      selectedVoice
     );
 
     coordinatorRef.current = coordinator;
@@ -508,6 +526,7 @@ export function App() {
 
       setProject(updatedProject);
       await saveProject(updatedProject, true);
+      await refreshVoiceStatuses(project.id);
 
       // If playback is not active, seamlessly switch to combined audio URL for whole-file scrubbing
       if (!isPlaying && audioRef.current && result.combinedUrl) {
@@ -526,6 +545,9 @@ export function App() {
     } finally {
       setIsGenerating(false);
       coordinatorRef.current = null;
+      if (project.id) {
+        refreshVoiceStatuses(project.id);
+      }
     }
   };
 
@@ -605,11 +627,68 @@ export function App() {
     await DesktopBridge.setAlwaysOnTop(nextPin);
   };
 
+  // Voice Switching with Multi-Voice Track Awareness & Resumable Status
+  const handleVoiceChange = async (newVoice: VoiceModel) => {
+    if (isGenerating && coordinatorRef.current) {
+      coordinatorRef.current.abort();
+      setIsGenerating(false);
+    }
+    stopAudio();
+
+    const subpath = getVoiceFolderSubpath(newVoice);
+    const voiceStatus = voiceStatuses[subpath] || voiceStatuses[newVoice.id];
+
+    Logger.info(`Switched active voice to "${newVoice.name}" (${newVoice.id}), subpath: ${subpath}`);
+
+    let newAudioUrl: string | undefined = undefined;
+    let newAudioBlob: Blob | undefined = undefined;
+
+    if (voiceStatus?.hasCombined && voiceStatus.combinedUrl) {
+      newAudioUrl = voiceStatus.combinedUrl;
+      isChunkStreamingRef.current = false;
+      if (audioRef.current) {
+        audioRef.current.src = voiceStatus.combinedUrl;
+        audioRef.current.playbackRate = playbackSpeed;
+        audioRef.current.volume = volume / 100;
+        audioRef.current.currentTime = 0;
+      }
+      setResumeNotification(`Voice switched to "${newVoice.name}". Full audio ready! Press Play.`);
+      setTimeout(() => setResumeNotification(null), 4000);
+    } else if (voiceStatus && voiceStatus.chunkCount > 0) {
+      const totalCh = splitTextIntoChunks(project.textContent, project.shadowSettings?.chunkSizeWords || 500).length;
+      setChunkProgress({
+        completedChunks: voiceStatus.chunkCount,
+        totalChunks: totalCh,
+        activeChunkId: voiceStatus.chunkCount,
+      });
+      setResumeNotification(`Voice switched to "${newVoice.name}". ${voiceStatus.chunkCount}/${totalCh} chunks generated. Press Generate to resume.`);
+      setTimeout(() => setResumeNotification(null), 5000);
+    } else {
+      setChunkProgress(null);
+      setResumeNotification(`Voice switched to "${newVoice.name}". Ready to generate speech.`);
+      setTimeout(() => setResumeNotification(null), 3000);
+    }
+
+    const updatedProject: ProjectData = {
+      ...project,
+      voiceSettings: {
+        ...project.voiceSettings,
+        voiceId: newVoice.id,
+      },
+      audioUrl: newAudioUrl,
+      audioBlob: newAudioBlob,
+    };
+
+    setProject(updatedProject);
+    await saveProject(updatedProject, false);
+  };
+
   // Project Switching Handlers
   const handleSelectProject = (selected: ProjectData) => {
     setProject(selected);
     setCurrentTime(selected.playbackMemory.currentTime || 0);
     setActiveCueIndex(selected.playbackMemory.activeCueIndex || 0);
+    refreshVoiceStatuses(selected.id);
   };
 
   const handleNewProject = () => {
@@ -744,6 +823,7 @@ export function App() {
               <VoiceSettingsPanel
                 selectedVoice={selectedVoice}
                 onOpenVoiceModal={() => setIsVoiceModalOpen(true)}
+                voiceStatus={voiceStatuses[getVoiceFolderSubpath(selectedVoice)] || voiceStatuses[selectedVoice.id]}
                 speed={project.voiceSettings.rate}
                 onSpeedChange={(r) =>
                   setProject((p) => ({
@@ -827,12 +907,9 @@ export function App() {
         isOpen={isVoiceModalOpen}
         onClose={() => setIsVoiceModalOpen(false)}
         selectedVoice={selectedVoice}
-        onSelectVoice={(v) => {
-          setProject((p) => ({
-            ...p,
-            voiceSettings: { ...p.voiceSettings, voiceId: v.id },
-          }));
-        }}
+        onSelectVoice={(v) => handleVoiceChange(v)}
+        voiceStatuses={voiceStatuses}
+        totalChunks={chunkProgress?.totalChunks || splitTextIntoChunks(project.textContent, project.shadowSettings?.chunkSizeWords || 500).length}
       />
 
       {/* Projects & Reading Memory Manager Modal */}

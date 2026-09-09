@@ -1,4 +1,4 @@
-import { TextChunk, TimedCue, ShadowGenSettings } from '../types';
+import { TextChunk, TimedCue, ShadowGenSettings, VoiceModel } from '../types';
 import { synthesizeSpeech, generateEstimatedCues } from './edgeTtsClient';
 import { DesktopBridge } from './desktopBridge';
 import { Logger } from './logger';
@@ -122,6 +122,7 @@ export class ChunkCoordinator {
   private isAborted = false;
   private projectId?: string;
   private voice: string;
+  private voiceModel?: VoiceModel;
   private rate: number;
   private pitch: number;
   private volume: number;
@@ -140,12 +141,14 @@ export class ChunkCoordinator {
     shadowSettings: ShadowGenSettings,
     onProgress: (update: ChunkProgressUpdate) => void,
     onFirstChunkReady?: (firstChunk: TextChunk) => void,
-    onChunkReady?: (chunk: TextChunk, allChunks: TextChunk[]) => void
+    onChunkReady?: (chunk: TextChunk, allChunks: TextChunk[]) => void,
+    voiceModel?: VoiceModel
   ) {
     const useLadder = shadowSettings.useFastStartLadder ?? true;
     this.chunks = splitTextIntoChunks(text, shadowSettings.chunkSizeWords || 500, useLadder);
     this.projectId = projectId;
     this.voice = voice;
+    this.voiceModel = voiceModel;
     this.rate = rate;
     this.pitch = pitch;
     this.volume = volume;
@@ -241,9 +244,9 @@ export class ChunkCoordinator {
     try {
       // Step 1: Check if this chunk is already synthesized and saved on disk!
       if (this.projectId && DesktopBridge.isDesktop()) {
-        const isCached = await DesktopBridge.checkChunkCache(this.projectId, index);
+        const isCached = await DesktopBridge.checkChunkCache(this.projectId, index, this.voiceModel);
         if (isCached) {
-          const cachedBlob = await DesktopBridge.getChunkAudio(this.projectId, index);
+          const cachedBlob = await DesktopBridge.getChunkAudio(this.projectId, index, this.voiceModel);
           if (cachedBlob && cachedBlob.size > 0) {
             Logger.info(`Found cached Chunk ${index + 1} on disk (${cachedBlob.size} bytes). Reusing existing MP3!`);
             chunk.audioBlob = cachedBlob;
@@ -285,7 +288,7 @@ export class ChunkCoordinator {
 
       // Save Chunk audio directly to disk file if running on desktop
       if (this.projectId && DesktopBridge.isDesktop()) {
-        DesktopBridge.saveChunkAudio(this.projectId, index, result.audioBlob).catch((e) => {
+        DesktopBridge.saveChunkAudio(this.projectId, index, result.audioBlob, this.voiceModel).catch((e) => {
           Logger.warn(`Failed to persist chunk ${index} to disk:`, e);
         });
       }
@@ -378,7 +381,7 @@ export class ChunkCoordinator {
 
     // Save combined.mp3 to disk file
     if (this.projectId && DesktopBridge.isDesktop()) {
-      DesktopBridge.saveCombinedAudio(this.projectId, combinedBlob).catch((e) => {
+      DesktopBridge.saveCombinedAudio(this.projectId, combinedBlob, this.voiceModel).catch((e) => {
         Logger.warn('Failed to persist combined.mp3 to disk:', e);
       });
     }

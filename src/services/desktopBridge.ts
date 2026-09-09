@@ -1,8 +1,17 @@
+import { VoiceModel, VoiceTrackStatus } from '../types';
+
 export interface StorageInfo {
   storage_dir: string;
   exists: boolean;
   project_count: number;
   total_size_mb: number;
+}
+
+export interface VoiceTrackParams {
+  voiceId?: string;
+  voiceLocale?: string;
+  voiceGender?: string;
+  voiceName?: string;
 }
 
 declare global {
@@ -23,12 +32,55 @@ declare global {
         save_project_to_disk?: (projectData: any) => Promise<boolean>;
         load_all_projects_from_disk?: () => Promise<any[]>;
         load_project_from_disk?: (projectId: string) => Promise<any | null>;
-        save_chunk_audio?: (projectId: string, chunkId: number, base64Data: string) => Promise<boolean>;
-        save_combined_audio?: (projectId: string, base64Data: string) => Promise<boolean>;
-        check_chunk_cache?: (projectId: string, chunkId: number) => Promise<boolean>;
-        get_chunk_audio?: (projectId: string, chunkId: number) => Promise<string | null>;
-        get_chunk_audio_url?: (projectId: string, chunkId: number) => Promise<string | null>;
-        get_combined_audio_url?: (projectId: string) => Promise<string | null>;
+        save_chunk_audio?: (
+          projectId: string,
+          chunkId: number,
+          base64Data: string,
+          voiceId?: string,
+          voiceLocale?: string,
+          voiceGender?: string,
+          voiceName?: string
+        ) => Promise<boolean>;
+        save_combined_audio?: (
+          projectId: string,
+          base64Data: string,
+          voiceId?: string,
+          voiceLocale?: string,
+          voiceGender?: string,
+          voiceName?: string
+        ) => Promise<boolean>;
+        check_chunk_cache?: (
+          projectId: string,
+          chunkId: number,
+          voiceId?: string,
+          voiceLocale?: string,
+          voiceGender?: string,
+          voiceName?: string
+        ) => Promise<boolean>;
+        get_chunk_audio?: (
+          projectId: string,
+          chunkId: number,
+          voiceId?: string,
+          voiceLocale?: string,
+          voiceGender?: string,
+          voiceName?: string
+        ) => Promise<string | null>;
+        get_chunk_audio_url?: (
+          projectId: string,
+          chunkId: number,
+          voiceId?: string,
+          voiceLocale?: string,
+          voiceGender?: string,
+          voiceName?: string
+        ) => Promise<string | null>;
+        get_combined_audio_url?: (
+          projectId: string,
+          voiceId?: string,
+          voiceLocale?: string,
+          voiceGender?: string,
+          voiceName?: string
+        ) => Promise<string | null>;
+        get_project_voice_statuses?: (projectId: string) => Promise<Record<string, VoiceTrackStatus>>;
         delete_project_from_disk?: (projectId: string) => Promise<boolean>;
         synthesize_edge_tts?: (
           text: string,
@@ -187,11 +239,12 @@ export const DesktopBridge = {
     return null;
   },
 
-  async saveChunkAudio(projectId: string, chunkId: number, blob: Blob): Promise<boolean> {
+  async saveChunkAudio(projectId: string, chunkId: number, blob: Blob, voice?: VoiceModel | VoiceTrackParams): Promise<boolean> {
     if (window.pywebview?.api?.save_chunk_audio) {
       try {
         const base64 = await blobToBase64(blob);
-        return await window.pywebview.api.save_chunk_audio(projectId, chunkId, base64);
+        const [vId, vLoc, vGen, vName] = extractVoiceArgs(voice);
+        return await window.pywebview.api.save_chunk_audio(projectId, chunkId, base64, vId, vLoc, vGen, vName);
       } catch (e) {
         console.warn(`Failed to save chunk ${chunkId} audio to disk`, e);
       }
@@ -199,11 +252,12 @@ export const DesktopBridge = {
     return false;
   },
 
-  async saveCombinedAudio(projectId: string, blob: Blob): Promise<boolean> {
+  async saveCombinedAudio(projectId: string, blob: Blob, voice?: VoiceModel | VoiceTrackParams): Promise<boolean> {
     if (window.pywebview?.api?.save_combined_audio) {
       try {
         const base64 = await blobToBase64(blob);
-        return await window.pywebview.api.save_combined_audio(projectId, base64);
+        const [vId, vLoc, vGen, vName] = extractVoiceArgs(voice);
+        return await window.pywebview.api.save_combined_audio(projectId, base64, vId, vLoc, vGen, vName);
       } catch (e) {
         console.warn('Failed to save combined audio to disk', e);
       }
@@ -211,10 +265,11 @@ export const DesktopBridge = {
     return false;
   },
 
-  async checkChunkCache(projectId: string, chunkId: number): Promise<boolean> {
+  async checkChunkCache(projectId: string, chunkId: number, voice?: VoiceModel | VoiceTrackParams): Promise<boolean> {
     if (window.pywebview?.api?.check_chunk_cache) {
       try {
-        return await window.pywebview.api.check_chunk_cache(projectId, chunkId);
+        const [vId, vLoc, vGen, vName] = extractVoiceArgs(voice);
+        return await window.pywebview.api.check_chunk_cache(projectId, chunkId, vId, vLoc, vGen, vName);
       } catch (e) {
         console.warn('Failed to check chunk cache', e);
       }
@@ -222,10 +277,11 @@ export const DesktopBridge = {
     return false;
   },
 
-  async getChunkAudio(projectId: string, chunkId: number): Promise<Blob | null> {
+  async getChunkAudio(projectId: string, chunkId: number, voice?: VoiceModel | VoiceTrackParams): Promise<Blob | null> {
     if (window.pywebview?.api?.get_chunk_audio) {
       try {
-        const dataUri = await window.pywebview.api.get_chunk_audio(projectId, chunkId);
+        const [vId, vLoc, vGen, vName] = extractVoiceArgs(voice);
+        const dataUri = await window.pywebview.api.get_chunk_audio(projectId, chunkId, vId, vLoc, vGen, vName);
         if (dataUri) {
           return await dataUriToBlob(dataUri);
         }
@@ -236,10 +292,11 @@ export const DesktopBridge = {
     return null;
   },
 
-  async getChunkAudioUrl(projectId: string, chunkId: number): Promise<string | null> {
+  async getChunkAudioUrl(projectId: string, chunkId: number, voice?: VoiceModel | VoiceTrackParams): Promise<string | null> {
     if (window.pywebview?.api?.get_chunk_audio_url) {
       try {
-        return await window.pywebview.api.get_chunk_audio_url(projectId, chunkId);
+        const [vId, vLoc, vGen, vName] = extractVoiceArgs(voice);
+        return await window.pywebview.api.get_chunk_audio_url(projectId, chunkId, vId, vLoc, vGen, vName);
       } catch (e) {
         console.warn('Failed to get chunk audio URL', e);
       }
@@ -247,15 +304,27 @@ export const DesktopBridge = {
     return null;
   },
 
-  async getCombinedAudioUrl(projectId: string): Promise<string | null> {
+  async getCombinedAudioUrl(projectId: string, voice?: VoiceModel | VoiceTrackParams): Promise<string | null> {
     if (window.pywebview?.api?.get_combined_audio_url) {
       try {
-        return await window.pywebview.api.get_combined_audio_url(projectId);
+        const [vId, vLoc, vGen, vName] = extractVoiceArgs(voice);
+        return await window.pywebview.api.get_combined_audio_url(projectId, vId, vLoc, vGen, vName);
       } catch (e) {
         console.warn('Failed to get combined audio URL', e);
       }
     }
     return null;
+  },
+
+  async getProjectVoiceStatuses(projectId: string): Promise<Record<string, VoiceTrackStatus>> {
+    if (window.pywebview?.api?.get_project_voice_statuses) {
+      try {
+        return (await window.pywebview.api.get_project_voice_statuses(projectId)) || {};
+      } catch (e) {
+        console.warn('Failed to get project voice statuses', e);
+      }
+    }
+    return {};
   },
 
   async deleteProjectFromDisk(projectId: string): Promise<boolean> {
@@ -313,6 +382,17 @@ export const DesktopBridge = {
     }
   },
 };
+
+function extractVoiceArgs(
+  voice?: VoiceModel | VoiceTrackParams
+): [string | undefined, string | undefined, string | undefined, string | undefined] {
+  if (!voice) return [undefined, undefined, undefined, undefined];
+  if ('locale' in voice && 'name' in voice && 'gender' in voice) {
+    return [voice.id, voice.locale, voice.gender, voice.name];
+  }
+  const vt = voice as VoiceTrackParams;
+  return [vt.voiceId, vt.voiceLocale, vt.voiceGender, vt.voiceName];
+}
 
 /** Helper to convert Blob to base64 string */
 export function blobToBase64(blob: Blob): Promise<string> {

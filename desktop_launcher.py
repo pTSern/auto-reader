@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import base64
@@ -261,14 +262,50 @@ class DesktopApi:
             self.write_log("error", f"Error loading single project {project_id}: {e}")
             return None
 
-    def save_chunk_audio(self, project_id: str, chunk_id: int, base64_data: str) -> bool:
-        """Saves a chunk's MP3 audio directly to disk <project_id>/chunks/chunk_<id>.mp3"""
-        try:
-            p_dir = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks")
-            os.makedirs(p_dir, exist_ok=True)
-            mp3_path = os.path.join(p_dir, f"chunk_{chunk_id}.mp3")
+    # ------------------ MULTI-VOICE PERSISTENCE & SUBPATH RESOLUTION ------------------
 
-            # Remove prefix if present (e.g. data:audio/mp3;base64,...)
+    def _resolve_voice_subpath(self, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str:
+        """
+        Resolves folder subpath formatted as: <locale>/<gender>_<name>
+        e.g., 'en-US/female_jenny' or 'vi-VN/female_hoaimy'
+        """
+        if voice_locale and voice_name:
+            gender = (voice_gender or "female").lower().strip()
+            name = re.sub(r"[^\w\-]+", "_", voice_name.lower().strip())
+            locale = voice_locale.strip()
+            return f"{locale}/{gender}_{name}"
+
+        if voice_id:
+            if "/" in voice_id:
+                return voice_id.strip()
+
+            parts = voice_id.split("-")
+            if len(parts) >= 3:
+                locale = f"{parts[0]}-{parts[1]}"
+                raw_name = parts[2].replace("Neural", "")
+                gender = (voice_gender or "female").lower().strip()
+                name = re.sub(r"[^\w\-]+", "_", raw_name.lower().strip())
+                return f"{locale}/{gender}_{name}"
+
+            return re.sub(r"[^\w\-]+", "_", voice_id.lower().strip())
+
+        return ""
+
+    def _get_voice_dir(self, project_id: str, voice_subpath: str = "") -> str:
+        """Returns absolute path to project's voice directory"""
+        if voice_subpath:
+            return os.path.join(self.get_storage_dir(), "projects", project_id, voice_subpath)
+        return os.path.join(self.get_storage_dir(), "projects", project_id)
+
+    def save_chunk_audio(self, project_id: str, chunk_id: int, base64_data: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> bool:
+        """Saves a chunk's MP3 audio to disk: <project_id>/<voice_subpath>/chunks/chunk_<id>.mp3"""
+        try:
+            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
+            v_dir = self._get_voice_dir(project_id, subpath)
+            chunks_dir = os.path.join(v_dir, "chunks")
+            os.makedirs(chunks_dir, exist_ok=True)
+            mp3_path = os.path.join(chunks_dir, f"chunk_{chunk_id}.mp3")
+
             if "," in base64_data:
                 base64_data = base64_data.split(",", 1)[1]
 
@@ -276,18 +313,19 @@ class DesktopApi:
             with open(mp3_path, "wb") as f:
                 f.write(binary_data)
 
-            self.write_log("info", f"Saved Chunk {chunk_id} audio to disk ({len(binary_data)} bytes) at {mp3_path}")
+            self.write_log("info", f"Saved Chunk {chunk_id} ({subpath or 'default'}) audio to disk ({len(binary_data)} bytes) at {mp3_path}")
             return True
         except Exception as e:
             self.write_log("error", f"Error saving chunk audio: {e}")
             return False
 
-    def save_combined_audio(self, project_id: str, base64_data: str) -> bool:
-        """Saves combined project MP3 file to disk at <project_id>/combined.mp3"""
+    def save_combined_audio(self, project_id: str, base64_data: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> bool:
+        """Saves combined project MP3 file to disk at <project_id>/<voice_subpath>/combined.mp3"""
         try:
-            p_dir = os.path.join(self.get_storage_dir(), "projects", project_id)
-            os.makedirs(p_dir, exist_ok=True)
-            mp3_path = os.path.join(p_dir, "combined.mp3")
+            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
+            v_dir = self._get_voice_dir(project_id, subpath)
+            os.makedirs(v_dir, exist_ok=True)
+            mp3_path = os.path.join(v_dir, "combined.mp3")
 
             if "," in base64_data:
                 base64_data = base64_data.split(",", 1)[1]
@@ -296,53 +334,172 @@ class DesktopApi:
             with open(mp3_path, "wb") as f:
                 f.write(binary_data)
 
-            self.write_log("info", f"Saved combined MP3 audio to disk ({len(binary_data)} bytes) at {mp3_path}")
+            self.write_log("info", f"Saved combined MP3 ({subpath or 'default'}) to disk ({len(binary_data)} bytes) at {mp3_path}")
             return True
         except Exception as e:
             self.write_log("error", f"Error saving combined audio: {e}")
             return False
 
-    def get_combined_audio_url(self, project_id: str) -> str | None:
-        """Returns HTTP streaming URL for a project's combined MP3"""
-        try:
-            mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "combined.mp3")
-            if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
-                mtime = int(os.path.getmtime(mp3_path))
-                return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/combined.mp3?t={mtime}"
-        except Exception as e:
-            print(f"Error getting combined audio URL: {e}")
-        return None
-
-    def check_chunk_cache(self, project_id: str, chunk_id: int) -> bool:
+    def check_chunk_cache(self, project_id: str, chunk_id: int, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> bool:
         """Checks if a chunk MP3 file already exists on disk and is non-empty"""
         try:
-            mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
-            return os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0
+            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
+            if subpath:
+                v_path = os.path.join(self.get_storage_dir(), "projects", project_id, subpath, "chunks", f"chunk_{chunk_id}.mp3")
+                if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
+                    return True
+            # Legacy fallback
+            leg_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
+            return os.path.exists(leg_path) and os.path.getsize(leg_path) > 0
         except Exception:
             return False
 
-    def get_chunk_audio_url(self, project_id: str, chunk_id: int) -> str | None:
+    def get_chunk_audio_url(self, project_id: str, chunk_id: int, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str | None:
         """Returns HTTP streaming URL for a cached chunk"""
         try:
-            mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
-            if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
-                mtime = int(os.path.getmtime(mp3_path))
+            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
+            if subpath:
+                v_path = os.path.join(self.get_storage_dir(), "projects", project_id, subpath, "chunks", f"chunk_{chunk_id}.mp3")
+                if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
+                    mtime = int(os.path.getmtime(v_path))
+                    url_subpath = subpath.replace("\\", "/")
+                    return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/{url_subpath}/chunks/chunk_{chunk_id}.mp3?t={mtime}"
+
+            # Legacy fallback
+            leg_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
+            if os.path.exists(leg_path) and os.path.getsize(leg_path) > 0:
+                mtime = int(os.path.getmtime(leg_path))
                 return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/chunks/chunk_{chunk_id}.mp3?t={mtime}"
         except Exception as e:
             print(f"Error getting chunk audio URL: {e}")
         return None
 
-    def get_chunk_audio(self, project_id: str, chunk_id: int) -> str | None:
+    def get_chunk_audio(self, project_id: str, chunk_id: int, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str | None:
         """Loads a cached chunk's MP3 file from disk as base64 data URI (fallback)"""
         try:
-            mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
-            if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
-                with open(mp3_path, "rb") as f:
+            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
+            target_path = None
+            if subpath:
+                v_path = os.path.join(self.get_storage_dir(), "projects", project_id, subpath, "chunks", f"chunk_{chunk_id}.mp3")
+                if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
+                    target_path = v_path
+
+            if not target_path:
+                leg_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
+                if os.path.exists(leg_path) and os.path.getsize(leg_path) > 0:
+                    target_path = leg_path
+
+            if target_path:
+                with open(target_path, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode("ascii")
                     return f"data:audio/mp3;base64,{b64}"
         except Exception as e:
             print(f"Error reading chunk audio: {e}")
         return None
+
+    def get_combined_audio_url(self, project_id: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str | None:
+        """Returns HTTP streaming URL for a project's combined MP3"""
+        try:
+            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
+            if subpath:
+                v_path = os.path.join(self.get_storage_dir(), "projects", project_id, subpath, "combined.mp3")
+                if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
+                    mtime = int(os.path.getmtime(v_path))
+                    url_subpath = subpath.replace("\\", "/")
+                    return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/{url_subpath}/combined.mp3?t={mtime}"
+
+            # Legacy fallback
+            leg_path = os.path.join(self.get_storage_dir(), "projects", project_id, "combined.mp3")
+            if os.path.exists(leg_path) and os.path.getsize(leg_path) > 0:
+                mtime = int(os.path.getmtime(leg_path))
+                return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/combined.mp3?t={mtime}"
+        except Exception as e:
+            print(f"Error getting combined audio URL: {e}")
+        return None
+
+    def get_project_voice_statuses(self, project_id: str) -> dict:
+        """
+        Scans project directory for all generated voice tracks and their chunk completion status.
+        Returns a dictionary keyed by voice subpath (e.g. 'en-US/female_jenny'):
+        {
+            "en-US/female_jenny": {
+                "voiceSubpath": "en-US/female_jenny",
+                "locale": "en-US",
+                "hasCombined": True,
+                "combinedUrl": "http://127.0.0.1:5174/...",
+                "chunkCount": 24,
+                "generatedChunkIndices": [0, 1, 2, ...],
+                "mtime": 1720000000
+            }
+        }
+        """
+        results = {}
+        try:
+            p_dir = os.path.join(self.get_storage_dir(), "projects", project_id)
+            if not os.path.exists(p_dir):
+                return {}
+
+            def scan_voice_folder(folder_path: str, subpath: str, locale: str = ""):
+                if not os.path.isdir(folder_path):
+                    return
+                combined_path = os.path.join(folder_path, "combined.mp3")
+                has_combined = os.path.exists(combined_path) and os.path.getsize(combined_path) > 0
+                combined_url = None
+                mtime = 0
+                if has_combined:
+                    mtime = int(os.path.getmtime(combined_path))
+                    url_subpath = subpath.replace("\\", "/").strip("/")
+                    combined_url = f"http://127.0.0.1:{self._media_port}/projects/{project_id}/{url_subpath}/combined.mp3?t={mtime}" if url_subpath and url_subpath != "default" else f"http://127.0.0.1:{self._media_port}/projects/{project_id}/combined.mp3?t={mtime}"
+
+                chunks_dir = os.path.join(folder_path, "chunks")
+                indices = []
+                if os.path.isdir(chunks_dir):
+                    for fname in os.listdir(chunks_dir):
+                        if fname.startswith("chunk_") and fname.endswith(".mp3"):
+                            try:
+                                c_idx = int(fname.replace("chunk_", "").replace(".mp3", ""))
+                                c_path = os.path.join(chunks_dir, fname)
+                                if os.path.getsize(c_path) > 0:
+                                    indices.append(c_idx)
+                                    if not mtime:
+                                        mtime = int(os.path.getmtime(c_path))
+                            except ValueError:
+                                pass
+                indices.sort()
+
+                if has_combined or len(indices) > 0:
+                    clean_sub = subpath.replace("\\", "/")
+                    results[clean_sub] = {
+                        "voiceSubpath": clean_sub,
+                        "locale": locale,
+                        "hasCombined": has_combined,
+                        "combinedUrl": combined_url,
+                        "chunkCount": len(indices),
+                        "generatedChunkIndices": indices,
+                        "mtime": mtime
+                    }
+
+            for item in os.listdir(p_dir):
+                item_path = os.path.join(p_dir, item)
+                if not os.path.isdir(item_path) or item in ["chunks", "logs", "__pycache__"]:
+                    continue
+
+                is_direct_voice = os.path.exists(os.path.join(item_path, "chunks")) or os.path.exists(os.path.join(item_path, "combined.mp3"))
+
+                if is_direct_voice:
+                    scan_voice_folder(item_path, item, "")
+                else:
+                    for sub in os.listdir(item_path):
+                        sub_path = os.path.join(item_path, sub)
+                        if os.path.isdir(sub_path):
+                            scan_voice_folder(sub_path, f"{item}/{sub}", item)
+
+            scan_voice_folder(p_dir, "default", "")
+
+        except Exception as e:
+            self.write_log("error", f"Error scanning project voice statuses: {e}")
+
+        return results
 
     def delete_project_from_disk(self, project_id: str) -> bool:
         """Deletes the project folder and all its audio files from disk"""

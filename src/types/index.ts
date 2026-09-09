@@ -54,6 +54,31 @@ export interface PlaybackMemory {
   percentCompleted: number;
 }
 
+export interface VoiceTrackStatus {
+  voiceSubpath: string; // e.g. "en-US/female_jenny"
+  locale?: string;
+  hasCombined: boolean;
+  combinedUrl?: string | null;
+  chunkCount: number;
+  generatedChunkIndices: number[];
+  mtime?: number;
+}
+
+export interface VoiceTrackData {
+  voiceId: string;
+  voiceSubpath: string;
+  locale: string;
+  gender: 'Female' | 'Male';
+  name: string;
+  hasCombined: boolean;
+  combinedUrl?: string | null;
+  chunkCount: number;
+  generatedChunkIndices: number[];
+  cues?: TimedCue[];
+  duration?: number;
+  updatedAt?: number;
+}
+
 export interface ProjectData {
   id: string;
   title: string;
@@ -72,6 +97,7 @@ export interface ProjectData {
   audioUrl?: string;
   cues: TimedCue[];
   playbackMemory: PlaybackMemory;
+  voiceTracks?: Record<string, VoiceTrackData>;
 }
 
 export interface LogEntry {

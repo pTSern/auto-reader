@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { X, Search, Globe, Check, Play, Square, Mic, Sparkles } from 'lucide-react';
-import { VoiceModel } from '../types';
-import { VOICES_CATALOG, AVAILABLE_LANGUAGES, filterVoices } from '../services/voicesCatalog';
+import { VoiceModel, VoiceTrackStatus } from '../types';
+import { VOICES_CATALOG, AVAILABLE_LANGUAGES, filterVoices, getVoiceFolderSubpath } from '../services/voicesCatalog';
 
 interface VoiceSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   selectedVoice: VoiceModel;
   onSelectVoice: (voice: VoiceModel) => void;
+  voiceStatuses?: Record<string, VoiceTrackStatus>;
+  totalChunks?: number;
 }
 
 export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
@@ -15,6 +17,8 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
   onClose,
   selectedVoice,
   onSelectVoice,
+  voiceStatuses = {},
+  totalChunks = 0,
 }) => {
   const [selectedLanguage, setSelectedLanguage] = useState<string>('English');
   const [selectedGender, setSelectedGender] = useState<'All' | 'Female' | 'Male'>('All');
@@ -156,6 +160,8 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
             voices.map((voice) => {
               const isSelected = selectedVoice.id === voice.id;
               const isPreviewing = previewingVoiceId === voice.id;
+              const subpath = getVoiceFolderSubpath(voice);
+              const status = voiceStatuses[subpath] || voiceStatuses[voice.id];
 
               return (
                 <div
@@ -170,13 +176,33 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({
                   <div className="flex items-center space-x-3 min-w-0 pr-2">
                     <span className="text-xl shrink-0">{voice.flag}</span>
                     <div className="min-w-0">
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center flex-wrap gap-1.5">
                         <span className="font-semibold text-white text-xs">
                           {voice.name}
                         </span>
                         <span className="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] text-slate-300 font-mono">
                           {voice.gender}
                         </span>
+                        {/* Multi-Voice Status Tag */}
+                        {status?.hasCombined ? (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center space-x-1 shadow-sm">
+                            <Check className="w-2.5 h-2.5 mr-0.5 text-emerald-400" />
+                            <span>Generated</span>
+                          </span>
+                        ) : status && status.chunkCount > 0 ? (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-500/40 text-amber-300 text-[10px] font-medium flex items-center space-x-1 shadow-sm">
+                            <Sparkles className="w-2.5 h-2.5 mr-0.5 text-amber-400" />
+                            <span>
+                              {totalChunks > 0
+                                ? `${Math.round((status.chunkCount / totalChunks) * 100)}% (${status.chunkCount}/${totalChunks})`
+                                : `${status.chunkCount} chunks`}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-500 text-[10px]">
+                            Not Generated
+                          </span>
+                        )}
                         {isSelected && (
                           <span className="px-1.5 py-0.2 rounded bg-cyan-900/60 text-cyan-300 text-[10px] font-medium flex items-center space-x-1">
                             <Check className="w-2.5 h-2.5 mr-0.5" /> Selected

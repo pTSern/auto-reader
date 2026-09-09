@@ -12,13 +12,15 @@ import {
   Cpu,
   Layers,
   Zap,
+  Check,
 } from 'lucide-react';
-import { VoiceModel, ShadowGenSettings } from '../types';
+import { VoiceModel, ShadowGenSettings, VoiceTrackStatus } from '../types';
 import { getHardwareProfile } from '../services/chunkingEngine';
 
 interface VoiceSettingsPanelProps {
   selectedVoice: VoiceModel;
   onOpenVoiceModal: () => void;
+  voiceStatus?: VoiceTrackStatus;
   speed: number;
   onSpeedChange: (speed: number) => void;
   pitch: number;
@@ -43,6 +45,7 @@ interface VoiceSettingsPanelProps {
 export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
   selectedVoice,
   onOpenVoiceModal,
+  voiceStatus,
   speed,
   onSpeedChange,
   pitch,
@@ -94,6 +97,29 @@ export const VoiceSettingsPanel: React.FC<VoiceSettingsPanelProps> = ({
         <p className="text-[10px] text-slate-400 mt-1 truncate">
           {selectedVoice.personality || selectedVoice.region}
         </p>
+
+        {/* Voice Generation Status Badge */}
+        <div className="mt-2 flex items-center justify-between">
+          {voiceStatus?.hasCombined ? (
+            <span className="px-2 py-0.5 rounded-md bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center space-x-1 shadow-sm">
+              <Check className="w-2.5 h-2.5 mr-0.5 text-emerald-400" />
+              <span>Full Audio Ready (100%)</span>
+            </span>
+          ) : voiceStatus && voiceStatus.chunkCount > 0 ? (
+            <span className="px-2 py-0.5 rounded-md bg-amber-950/70 border border-amber-500/40 text-amber-300 text-[10px] font-medium flex items-center space-x-1 shadow-sm">
+              <Sparkles className="w-2.5 h-2.5 mr-0.5 text-amber-400" />
+              <span>
+                {chunkProgress?.totalChunks
+                  ? `${Math.round((voiceStatus.chunkCount / chunkProgress.totalChunks) * 100)}% Generated (${voiceStatus.chunkCount}/${chunkProgress.totalChunks})`
+                  : `${voiceStatus.chunkCount} chunks generated`}
+              </span>
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-slate-500 text-[10px]">
+              Not Generated
+            </span>
+          )}
+        </div>
 
         <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 group-hover:text-cyan-300 transition font-medium">
           <span>Change Voice & Language</span>

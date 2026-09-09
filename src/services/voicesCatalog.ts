@@ -98,3 +98,28 @@ export function filterVoices(
     return true;
   });
 }
+
+/**
+ * Generates structured directory subpath for a voice: <locale>/<gender>_<name>
+ * e.g. "en-US/female_jenny" or "vi-VN/female_hoaimy"
+ */
+export function getVoiceFolderSubpath(voice: VoiceModel): string {
+  const cleanGender = (voice.gender || 'Female').toLowerCase().trim();
+  const parts = voice.id.split('-');
+  let baseName = '';
+  if (parts.length >= 3) {
+    baseName = parts[parts.length - 1].replace(/Neural$/i, '').toLowerCase().trim();
+  }
+  if (!baseName) {
+    baseName = voice.name
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .trim() || 'voice';
+  }
+  const cleanLocale = voice.locale || 'general';
+  return `${cleanLocale}/${cleanGender}_${baseName}`;
+}
+
