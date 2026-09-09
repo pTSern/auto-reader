@@ -126,7 +126,11 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       </div>
 
       {/* Main Content Area */}
-      <div ref={scrollContainerRef} className="flex-1 p-6 overflow-y-auto custom-scrollbar flex flex-col">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 p-6 overflow-y-auto custom-scrollbar flex flex-col no-drag select-text"
+        style={{ WebkitAppRegion: 'no-drag' } as any}
+      >
         {isReadonly && tab === 'edit' && (
           <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-center space-x-2 animate-pulse">
             <span>🔒</span>
@@ -141,7 +145,8 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
             readOnly={isReadonly}
             onChange={(e) => !isReadonly && onTextChange(e.target.value)}
             placeholder="Type, paste text, or extract from PDF/TXT files on the left panel..."
-            className={`w-full flex-1 min-h-[400px] bg-transparent text-sm leading-relaxed outline-none resize-none font-mono selection:bg-cyan-500/30 transition-opacity ${
+            style={{ WebkitAppRegion: 'no-drag', userSelect: 'text' } as any}
+            className={`w-full flex-1 min-h-[400px] bg-transparent text-sm leading-relaxed outline-none resize-none font-mono selection:bg-cyan-500/30 transition-opacity no-drag select-text cursor-text ${
               isReadonly ? 'cursor-not-allowed text-slate-400 select-all' : 'text-slate-200'
             }`}
           />

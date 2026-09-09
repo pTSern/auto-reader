@@ -34,3 +34,19 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* Explicit window drag region */
+.pywebview-drag-region {
+  -webkit-app-region: drag;
+}
+
+/* Elements that must NEVER drag the window: textareas, inputs, buttons, editors */
+textarea, input, select, button, .no-drag {
+  -webkit-app-region: no-drag !important;
+}
+
+textarea {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+

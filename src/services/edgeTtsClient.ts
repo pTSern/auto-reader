@@ -1,4 +1,6 @@
 import { TimedCue } from '../types';
+import { DesktopBridge } from './desktopBridge';
+import { Logger } from './logger';
 
 const EDGE_TTS_TOKEN = '6A5AA1D4EA654972839958742E8E7D8B';
 const EDGE_TTS_WSS = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaheadworkaround/edge/v1?TrustedClientToken=${EDGE_TTS_TOKEN}`;
@@ -50,16 +52,38 @@ export async function synthesizeSpeech(
     throw new Error('Please provide text to convert to speech.');
   }
 
-  onProgress?.('Connecting to Edge-TTS neural engine...');
+  // 1. Primary Engine: Official native Python Edge-TTS in desktop app
+  if (DesktopBridge.isDesktop()) {
+    onProgress?.('Synthesizing neural speech via native Edge-TTS engine...');
+    Logger.info(`Synthesizing speech via native Edge-TTS with voice '${voice}'`);
+
+    const result = await DesktopBridge.synthesizeSpeech(text, voice, rate, pitch, volume);
+    if (result && result.success && result.audioBlob && result.audioUrl) {
+      const finalCues = (result.cues && result.cues.length > 0)
+        ? result.cues
+        : generateEstimatedCues(text);
+
+      return {
+        audioBlob: result.audioBlob,
+        audioUrl: result.audioUrl,
+        cues: finalCues,
+      };
+    } else if (result && !result.success) {
+      Logger.error(`Desktop Edge-TTS synthesis failed: ${result.error}`);
+      throw new Error(`Edge-TTS synthesis error: ${result.error}`);
+    }
+  }
+
+  // 2. Secondary Engine: Direct WebSocket streaming (browser mode)
+  onProgress?.('Connecting to Edge-TTS neural endpoint...');
 
   return new Promise<SynthesisResult>((resolve, reject) => {
     let ws: WebSocket;
     try {
       ws = new WebSocket(EDGE_TTS_WSS);
       ws.binaryType = 'arraybuffer';
-    } catch (err) {
-      console.warn('Direct WebSocket failed, falling back to simulated speech cues', err);
-      resolve(createFallbackSynthesis(text));
+    } catch (err: any) {
+      reject(new Error(`WebSocket connection failed: ${err?.message || err}`));
       return;
     }
 
@@ -69,14 +93,14 @@ export async function synthesizeSpeech(
     const requestId = generateUuid();
     const timestamp = new Date().toISOString();
 
+
     const timeout = setTimeout(() => {
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
         if (audioChunks.length > 0) {
           finishSynthesis();
         } else {
-          // Fallback to local audio synthesis if connection timed out
-          resolve(createFallbackSynthesis(text));
+          reject(new Error('Edge-TTS neural synthesis timed out.'));
         }
       }
     }, 25000);
@@ -171,12 +195,11 @@ export async function synthesizeSpeech(
     };
 
     ws.onerror = (err) => {
-      console.warn('WebSocket connection error with Edge-TTS', err);
       clearTimeout(timeout);
       if (audioChunks.length > 0) {
         finishSynthesis();
       } else {
-        resolve(createFallbackSynthesis(text));
+        reject(new Error('WebSocket connection error with Edge-TTS endpoint.'));
       }
     };
 
@@ -187,6 +210,7 @@ export async function synthesizeSpeech(
     };
   });
 }
+
 
 /**
  * Splits text into sentences and assigns smooth proportional timestamps
@@ -224,52 +248,7 @@ export function generateEstimatedCues(text: string): TimedCue[] {
 
 /**
  * Creates audio fallback using client Web Audio synthesis if offline
- */
-function createFallbackSynthesis(text: string): Promise<SynthesisResult> {
-  const cues = generateEstimatedCues(text);
-  const totalDuration = cues.length > 0 ? cues[cues.length - 1].end + 1 : 5;
 
-  // Generate a silent / ambient carrier wave so player works seamlessly
-  const sampleRate = 24000;
-  const numSamples = Math.ceil(totalDuration * sampleRate);
-  const buffer = new ArrayBuffer(44 + numSamples * 2);
-  const view = new DataView(buffer);
-
-  // Write WAV header
-  const writeString = (offset: number, str: string) => {
-    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-  };
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + numSamples * 2, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // Mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeString(36, 'data');
-  view.setUint32(40, numSamples * 2, true);
-
-  // Fill gentle audio tone
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    const sample = Math.sin(2 * Math.PI * 440 * t) * 0.05 * (1 - (i / numSamples));
-    view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-  }
-
-  const audioBlob = new Blob([buffer], { type: 'audio/wav' });
-  const audioUrl = URL.createObjectURL(audioBlob);
-
-  return Promise.resolve({
-    audioBlob,
-    audioUrl,
-    cues,
-  });
-}
 
 /**
  * Generates .SRT subtitle string from cues

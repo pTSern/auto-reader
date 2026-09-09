@@ -28,11 +28,11 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
   return (
     <header
-      className="h-12 bg-slate-950 border-b border-slate-800/80 px-4 flex items-center justify-between select-none z-20"
+      className="h-12 bg-slate-950 border-b border-slate-800/80 px-4 flex items-center justify-between select-none z-20 pywebview-drag-region"
       style={{ WebkitAppRegion: 'drag' } as any}
     >
       {/* Left: App title & Project Switcher */}
-      <div className="flex items-center space-x-3" style={{ WebkitAppRegion: 'no-drag' } as any}>
+      <div className="flex items-center space-x-3 no-drag" style={{ WebkitAppRegion: 'no-drag' } as any}>
         <div className="flex items-center space-x-2 text-cyan-400 font-semibold tracking-wide">
           <Volume2 className="w-5 h-5 text-cyan-400" />
           <span className="text-white text-sm font-bold">VoiceFlow Studio</span>

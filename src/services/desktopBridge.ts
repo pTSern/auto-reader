@@ -28,6 +28,20 @@ declare global {
         check_chunk_cache?: (projectId: string, chunkId: number) => Promise<boolean>;
         get_chunk_audio?: (projectId: string, chunkId: number) => Promise<string | null>;
         delete_project_from_disk?: (projectId: string) => Promise<boolean>;
+        synthesize_edge_tts?: (
+          text: string,
+          voice: string,
+          rate: number,
+          pitch: number,
+          volume: number
+        ) => Promise<{
+          success: boolean;
+          base64Audio?: string;
+          cues?: any[];
+          duration?: number;
+          byteLength?: number;
+          error?: string;
+        }>;
       };
     };
   }
@@ -229,6 +243,44 @@ export const DesktopBridge = {
       }
     }
     return false;
+  },
+
+  async synthesizeSpeech(
+    text: string,
+    voice: string = 'en-US-JennyNeural',
+    rate: number = 0,
+    pitch: number = 0,
+    volume: number = 100
+  ): Promise<{
+    success: boolean;
+    audioBlob?: Blob;
+    audioUrl?: string;
+    cues?: any[];
+    duration?: number;
+    error?: string;
+  } | null> {
+    if (window.pywebview?.api?.synthesize_edge_tts) {
+      try {
+        const res = await window.pywebview.api.synthesize_edge_tts(text, voice, rate, pitch, volume);
+        if (res && res.success && res.base64Audio) {
+          const blob = await dataUriToBlob(res.base64Audio);
+          const audioUrl = URL.createObjectURL(blob);
+          return {
+            success: true,
+            audioBlob: blob,
+            audioUrl,
+            cues: res.cues || [],
+            duration: res.duration || 0,
+          };
+        } else if (res && !res.success) {
+          return { success: false, error: res.error || 'Desktop synthesis failed' };
+        }
+      } catch (e: any) {
+        console.warn('Failed to synthesize speech via desktop bridge', e);
+        return { success: false, error: e.message || String(e) };
+      }
+    }
+    return null;
   },
 
   startWindowDrag(): void {

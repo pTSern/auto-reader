@@ -3,10 +3,12 @@ import sys
 import json
 import base64
 import shutil
+import asyncio
 import ctypes
 from ctypes import wintypes
 from datetime import datetime
 import webview
+import edge_tts
 
 HWND_TOPMOST = -1
 HWND_NOTOPMOST = -2
@@ -17,6 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE_PATH = os.path.join(BASE_DIR, "app.log")
 CONFIG_FILE_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_STORAGE_DIR = os.path.join(BASE_DIR, "projects_data")
+
 
 class DesktopApi:
     def __init__(self, window=None):
@@ -296,6 +299,60 @@ class DesktopApi:
             self.write_log("error", f"Error deleting project: {e}")
         return False
 
+    # ------------------ EDGE-TTS NEURAL SYNTHESIS ------------------
+
+    async def _async_edge_tts(self, text: str, voice: str, rate: int, pitch: int, volume: int) -> dict:
+        rate_str = f"{rate:+d}%" if rate != 0 else "+0%"
+        pitch_str = f"{pitch:+d}Hz" if pitch != 0 else "+0Hz"
+        vol_str = f"{volume - 100:+d}%" if volume != 100 else "+0%"
+
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=voice,
+            rate=rate_str,
+            pitch=pitch_str,
+            volume=vol_str
+        )
+
+        audio_data = bytearray()
+        cues = []
+        cue_idx = 0
+
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data.extend(chunk["data"])
+            elif chunk["type"] == "SentenceBoundary":
+                start_sec = round(chunk["offset"] / 10_000_000, 2)
+                duration_sec = round(chunk["duration"] / 10_000_000, 2)
+                end_sec = round(start_sec + duration_sec, 2)
+                cues.append({
+                    "id": cue_idx,
+                    "start": start_sec,
+                    "end": end_sec,
+                    "text": chunk.get("text", "").strip()
+                })
+                cue_idx += 1
+
+        b64_audio = "data:audio/mp3;base64," + base64.b64encode(audio_data).decode("ascii")
+        total_duration = cues[-1]["end"] if cues else 3.0
+
+        return {
+            "success": True,
+            "base64Audio": b64_audio,
+            "cues": cues,
+            "duration": total_duration,
+            "byteLength": len(audio_data)
+        }
+
+    def synthesize_edge_tts(self, text: str, voice: str = "en-US-JennyNeural", rate: int = 0, pitch: int = 0, volume: int = 100) -> dict:
+        """Synthesizes genuine Edge-TTS neural speech via official Python edge_tts engine"""
+        try:
+            self.write_log("info", f"Executing Python edge_tts neural synthesis for {len(text.split())} words with voice '{voice}'")
+            return asyncio.run(self._async_edge_tts(text, voice, rate, pitch, volume))
+        except Exception as e:
+            self.write_log("error", f"Python edge_tts synthesis error: {e}")
+            return {"success": False, "error": str(e)}
+
     # ------------------ WINDOW CONTROLS ------------------
 
     def set_mini_mode(self, is_mini: bool) -> bool:
@@ -369,7 +426,9 @@ class DesktopApi:
 def main():
     target_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5173"
     
-    # Create webview window with frameless=True for borderless desktop look
+    # Create webview window with frameless=True for borderless desktop look.
+    # easy_drag=False is CRITICAL so mouse-drag selection inside text editors works normally without dragging the window.
+    # Window dragging is isolated to .pywebview-drag-region in the titlebar.
     api_instance = DesktopApi(None)
     window = webview.create_window(
         title="VoiceFlow Studio",
@@ -378,7 +437,7 @@ def main():
         height=810,
         resizable=True,
         frameless=True,
-        easy_drag=True,
+        easy_drag=False,
         js_api=api_instance,
         background_color='#0b0f19'
     )
@@ -388,5 +447,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
