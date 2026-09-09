@@ -25,20 +25,38 @@ _MEDIA_SERVER_STARTED = False
 
 class DesktopApi:
     def __init__(self, window=None):
-        self.window = window
-        self.is_maximized = False
-        self.media_port = MEDIA_PORT
+        # Internal private attributes (prefixed with _ so pywebview ignores them during JS bridge introspection)
+        # Prevents circular reference inspection and 'RecursionError: maximum recursion depth exceeded / queue.Empty' storms
+        self._window = window
+        self._is_maximized = False
+        self._media_port = MEDIA_PORT
         self._init_logfile()
         self._init_config()
         self._init_media_server()
+
+    def set_window(self, window):
+        """Safely assigns window reference without exposing it as a public JS bridge property"""
+        self._window = window
+
+    @property
+    def media_port(self) -> int:
+        """Returns the media server port"""
+        return self._media_port
+
+    def get_media_port(self) -> int:
+        """Returns the media server port for JS/IPC callers"""
+        return self._media_port
 
     def _init_media_server(self):
         global _MEDIA_SERVER_STARTED
         if not _MEDIA_SERVER_STARTED:
             try:
-                start_media_server(self.get_storage_dir, port=self.media_port)
-                _MEDIA_SERVER_STARTED = True
-                self.write_log("info", f"Media streaming server listening on http://127.0.0.1:{self.media_port}")
+                srv = start_media_server(self.get_storage_dir, port=self._media_port)
+                if srv:
+                    _MEDIA_SERVER_STARTED = True
+                    self.write_log("info", f"Media streaming server listening on http://127.0.0.1:{self._media_port}")
+                else:
+                    self.write_log("warn", f"Media server could not bind to port {self._media_port} (may already be running)")
             except Exception as e:
                 self.write_log("error", f"Could not start media server: {e}")
 
@@ -131,11 +149,11 @@ class DesktopApi:
     def browse_storage_folder(self) -> str | None:
         """Opens native Windows folder picker dialog for user to select storage destination"""
         try:
-            if not self.window:
+            if not self._window:
                 return None
             current = self.get_storage_dir()
             # Dialog returns list of chosen paths
-            chosen = self.window.create_file_dialog(webview.FileDialog.FOLDER, directory=current)
+            chosen = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory=current)
             if chosen and len(chosen) > 0:
                 selected_path = chosen[0]
                 self.set_storage_dir(selected_path)
@@ -207,7 +225,7 @@ class DesktopApi:
                             p_data["hasDiskAudio"] = os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0
                             if p_data["hasDiskAudio"]:
                                 mtime = int(os.path.getmtime(mp3_path))
-                                p_data["audioHttpUrl"] = f"http://127.0.0.1:{self.media_port}/projects/{folder}/combined.mp3?t={mtime}"
+                                p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/projects/{folder}/combined.mp3?t={mtime}"
                             projects.append(p_data)
                     except Exception as err:
                         print(f"Error loading {fp}: {err}")
@@ -233,7 +251,7 @@ class DesktopApi:
             if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
                 mtime = int(os.path.getmtime(mp3_path))
                 p_data["hasDiskAudio"] = True
-                p_data["audioHttpUrl"] = f"http://127.0.0.1:{self.media_port}/projects/{project_id}/combined.mp3?t={mtime}"
+                p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/projects/{project_id}/combined.mp3?t={mtime}"
                 p_data["diskAudioBase64"] = None
             else:
                 p_data["hasDiskAudio"] = False
@@ -290,7 +308,7 @@ class DesktopApi:
             mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "combined.mp3")
             if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
                 mtime = int(os.path.getmtime(mp3_path))
-                return f"http://127.0.0.1:{self.media_port}/projects/{project_id}/combined.mp3?t={mtime}"
+                return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/combined.mp3?t={mtime}"
         except Exception as e:
             print(f"Error getting combined audio URL: {e}")
         return None
@@ -309,7 +327,7 @@ class DesktopApi:
             mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
             if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
                 mtime = int(os.path.getmtime(mp3_path))
-                return f"http://127.0.0.1:{self.media_port}/projects/{project_id}/chunks/chunk_{chunk_id}.mp3?t={mtime}"
+                return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/chunks/chunk_{chunk_id}.mp3?t={mtime}"
         except Exception as e:
             print(f"Error getting chunk audio URL: {e}")
         return None
@@ -387,7 +405,12 @@ class DesktopApi:
         """Synthesizes genuine Edge-TTS neural speech via official Python edge_tts engine"""
         try:
             self.write_log("info", f"Executing Python edge_tts neural synthesis for {len(text.split())} words with voice '{voice}'")
-            return asyncio.run(self._async_edge_tts(text, voice, rate, pitch, volume))
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                return loop.run_until_complete(self._async_edge_tts(text, voice, rate, pitch, volume))
+            finally:
+                loop.close()
         except Exception as e:
             self.write_log("error", f"Python edge_tts synthesis error: {e}")
             return {"success": False, "error": str(e)}
@@ -397,13 +420,13 @@ class DesktopApi:
     def set_mini_mode(self, is_mini: bool) -> bool:
         """Scales down window to floating mini-player bar (720x150) or expands to full (1440x810)"""
         try:
-            if not self.window:
+            if not self._window:
                 return False
             if is_mini:
-                self.window.resize(720, 150)
+                self._window.resize(720, 150)
                 self.set_pinned(True)
             else:
-                self.window.resize(1440, 810)
+                self._window.resize(1440, 810)
                 self.set_pinned(False)
             return True
         except Exception as e:
@@ -425,38 +448,38 @@ class DesktopApi:
     def minimize(self) -> bool:
         """Minimizes the native window"""
         try:
-            if self.window:
-                self.window.minimize()
+            if self._window:
+                self._window.minimize()
                 return True
         except Exception as e:
             print(f"Minimize error: {e}")
-        return False
+            return False
 
     def toggle_maximize(self) -> bool:
         """Toggles between maximized and restored window size"""
         try:
-            if self.window:
-                if self.is_maximized:
-                    self.window.restore()
-                    self.is_maximized = False
+            if self._window:
+                if self._is_maximized:
+                    self._window.restore()
+                    self._is_maximized = False
                 else:
-                    self.window.maximize()
-                    self.is_maximized = True
+                    self._window.maximize()
+                    self._is_maximized = True
                 return True
         except Exception as e:
             print(f"Toggle maximize error: {e}")
-        return False
+            return False
 
     def close(self) -> bool:
         """Terminates and destroys the native window"""
         try:
-            if self.window:
+            if self._window:
                 self.write_log("info", "Application exiting via UI close button.")
-                self.window.destroy()
+                self._window.destroy()
                 return True
         except Exception as e:
             print(f"Close error: {e}")
-        return False
+            return False
 
     def drag_window(self):
         """Allows dragging the native window"""
@@ -487,12 +510,9 @@ def main():
         js_api=api_instance,
         background_color='#0b0f19'
     )
-    api_instance.window = window
+    api_instance.set_window(window)
 
     webview.start()
 
 if __name__ == '__main__':
     main()
-
-
-

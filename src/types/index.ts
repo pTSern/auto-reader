@@ -35,6 +35,7 @@ export interface TextChunk {
   audioBlob?: Blob;
   audioUrl?: string;
   cues: TimedCue[];
+  rawCues?: TimedCue[];
   duration: number;
   offsetSeconds: number; // time offset in overall audio timeline
 }
@@ -43,6 +44,7 @@ export interface ShadowGenSettings {
   enabled: boolean;
   chunkSizeWords: number; // e.g. 500 words
   concurrencyMode: 'auto' | 'aggressive' | 'potato'; // auto detects CPU, aggressive pre-generates all, potato does 1 next
+  useFastStartLadder?: boolean; // Micro-chunk ladder for <500ms first audio playback
 }
 
 export interface PlaybackMemory {

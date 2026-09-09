@@ -13,10 +13,20 @@ export interface ChunkProgressUpdate {
 }
 
 /**
- * Splits text into sentence-aligned chunks of approximately targetWordCount.
+ * Splits text into sentence-aligned chunks.
  * Sentences are never sliced in half.
+ *
+ * When useFastStartLadder is true, applies an adaptive ramp:
+ * - Chunk 0: ~30 words (1-2 sentences) for near-instant (<400ms) audio playback.
+ * - Chunk 1: ~100 words (bridge chunk) synthesized while Chunk 0 is already playing.
+ * - Chunk 2: ~250 words.
+ * - Chunk 3+: full targetWordCount (default 500 words).
  */
-export function splitTextIntoChunks(text: string, targetWordCount: number = 500): TextChunk[] {
+export function splitTextIntoChunks(
+  text: string,
+  targetWordCount: number = 500,
+  useFastStartLadder: boolean = true
+): TextChunk[] {
   if (!text || text.trim() === '') return [];
 
   // Split text by sentence terminators while preserving punctuation
@@ -47,8 +57,20 @@ export function splitTextIntoChunks(text: string, targetWordCount: number = 500)
   for (const sentence of sentences) {
     const sWords = sentence.split(/\s+/).length;
 
+    // Calculate adaptive target word count for this chunk
+    let threshold = targetWordCount;
+    if (useFastStartLadder) {
+      if (chunkId === 0) {
+        threshold = Math.min(30, targetWordCount);
+      } else if (chunkId === 1) {
+        threshold = Math.min(100, targetWordCount);
+      } else if (chunkId === 2) {
+        threshold = Math.min(250, targetWordCount);
+      }
+    }
+
     // If adding this sentence exceeds target and we already have sentences, commit chunk
-    if (currentWords + sWords > targetWordCount && currentSentences.length > 0) {
+    if (currentWords + sWords > threshold && currentSentences.length > 0) {
       const chunkText = currentSentences.join(' ');
       chunks.push({
         id: chunkId++,
@@ -80,7 +102,7 @@ export function splitTextIntoChunks(text: string, targetWordCount: number = 500)
     });
   }
 
-  Logger.info(`Text partitioned into ${chunks.length} chunks (target ~${targetWordCount} words/chunk)`);
+  Logger.info(`Text partitioned into ${chunks.length} chunks (fastStartLadder: ${useFastStartLadder}, max ~${targetWordCount} words/chunk)`);
   return chunks;
 }
 
@@ -106,6 +128,7 @@ export class ChunkCoordinator {
   private shadowSettings: ShadowGenSettings;
   private onProgress: (update: ChunkProgressUpdate) => void;
   private onFirstChunkReady?: (firstChunk: TextChunk) => void;
+  private onChunkReady?: (chunk: TextChunk, allChunks: TextChunk[]) => void;
 
   constructor(
     projectId: string | undefined,
@@ -116,9 +139,11 @@ export class ChunkCoordinator {
     volume: number,
     shadowSettings: ShadowGenSettings,
     onProgress: (update: ChunkProgressUpdate) => void,
-    onFirstChunkReady?: (firstChunk: TextChunk) => void
+    onFirstChunkReady?: (firstChunk: TextChunk) => void,
+    onChunkReady?: (chunk: TextChunk, allChunks: TextChunk[]) => void
   ) {
-    this.chunks = splitTextIntoChunks(text, shadowSettings.chunkSizeWords || 500);
+    const useLadder = shadowSettings.useFastStartLadder ?? true;
+    this.chunks = splitTextIntoChunks(text, shadowSettings.chunkSizeWords || 500, useLadder);
     this.projectId = projectId;
     this.voice = voice;
     this.rate = rate;
@@ -127,6 +152,7 @@ export class ChunkCoordinator {
     this.shadowSettings = shadowSettings;
     this.onProgress = onProgress;
     this.onFirstChunkReady = onFirstChunkReady;
+    this.onChunkReady = onChunkReady;
   }
 
 
@@ -227,21 +253,11 @@ export class ChunkCoordinator {
             // Generate approximate cues from text
             const cues = generateEstimatedCues(chunk.text);
             const lastCue = cues[cues.length - 1];
+            chunk.rawCues = cues;
             chunk.duration = lastCue ? lastCue.end : Math.max(3, chunk.wordCount * 0.4);
 
-            let accumulatedOffset = 0;
-            for (let i = 0; i < index; i++) {
-              accumulatedOffset += this.chunks[i].duration || 0;
-            }
-            chunk.offsetSeconds = accumulatedOffset;
-
-            chunk.cues = cues.map((c, cIdx) => ({
-              id: (index * 1000) + cIdx,
-              start: parseFloat((c.start + accumulatedOffset).toFixed(2)),
-              end: parseFloat((c.end + accumulatedOffset).toFixed(2)),
-              text: c.text,
-            }));
-
+            this.recalculateOffsets();
+            this.onChunkReady?.(chunk, [...this.chunks]);
             return;
           }
         }
@@ -265,6 +281,7 @@ export class ChunkCoordinator {
       chunk.audioBlob = result.audioBlob;
       chunk.audioUrl = result.audioUrl;
       chunk.status = 'ready';
+      chunk.rawCues = result.cues && result.cues.length > 0 ? result.cues : generateEstimatedCues(chunk.text);
 
       // Save Chunk audio directly to disk file if running on desktop
       if (this.projectId && DesktopBridge.isDesktop()) {
@@ -274,29 +291,58 @@ export class ChunkCoordinator {
       }
 
       // Calculate total duration of this chunk from cues
-      const lastCue = result.cues[result.cues.length - 1];
+      const lastCue = chunk.rawCues[chunk.rawCues.length - 1];
       chunk.duration = lastCue ? lastCue.end : 5;
 
-      // Calculate time offset based on sum of prior chunks' durations
-      let accumulatedOffset = 0;
-      for (let i = 0; i < index; i++) {
-        accumulatedOffset += this.chunks[i].duration || 0;
-      }
-      chunk.offsetSeconds = accumulatedOffset;
-
-      // Shift cues by accumulatedOffset
-      chunk.cues = result.cues.map((c, cIdx) => ({
-        id: (index * 1000) + cIdx,
-        start: parseFloat((c.start + accumulatedOffset).toFixed(2)),
-        end: parseFloat((c.end + accumulatedOffset).toFixed(2)),
-        text: c.text,
-      }));
+      this.recalculateOffsets();
+      this.onChunkReady?.(chunk, [...this.chunks]);
 
       Logger.info(`Chunk ${index + 1} ready (${chunk.duration.toFixed(1)}s, offset: ${chunk.offsetSeconds.toFixed(1)}s).`);
     } catch (err: any) {
       Logger.error(`Chunk ${index + 1} synthesis failed:`, err.message || err);
       chunk.status = 'error';
     }
+  }
+
+  public recalculateOffsets(): void {
+    let runningOffset = 0;
+    for (let i = 0; i < this.chunks.length; i++) {
+      const ch = this.chunks[i];
+      ch.offsetSeconds = runningOffset;
+
+      // Ensure rawCues are always populated (from Edge-TTS if ready, or estimated if pending)
+      if (!ch.rawCues || ch.rawCues.length === 0) {
+        ch.rawCues = generateEstimatedCues(ch.text);
+      }
+
+      // Map cues with current running offset
+      ch.cues = ch.rawCues.map((c, cIdx) => ({
+        id: (ch.id * 1000) + cIdx,
+        start: parseFloat((c.start + runningOffset).toFixed(2)),
+        end: parseFloat((c.end + runningOffset).toFixed(2)),
+        text: c.text,
+      }));
+
+      // Determine chunk duration: real duration if ready, else end timestamp of last estimated cue
+      const lastCue = ch.rawCues[ch.rawCues.length - 1];
+      const dur = ch.duration > 0 ? ch.duration : (lastCue ? lastCue.end : Math.max(2, ch.wordCount / 2.6));
+      runningOffset = parseFloat((runningOffset + dur).toFixed(2));
+    }
+  }
+
+  public getChunks(): TextChunk[] {
+    return [...this.chunks];
+  }
+
+  public getAllCues(): TimedCue[] {
+    this.recalculateOffsets();
+    const all: TimedCue[] = [];
+    for (const ch of this.chunks) {
+      if (ch.cues && ch.cues.length > 0) {
+        all.push(...ch.cues);
+      }
+    }
+    return all;
   }
 
   private getCompletedCount(): number {

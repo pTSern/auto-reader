@@ -18,7 +18,10 @@ if (typeof window !== 'undefined' && 'GlobalWorkerOptions' in pdfjsLib) {
   (pdfjsLib as any).GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '4.10.38'}/pdf.worker.min.mjs`;
 }
 
-export async function extractTextFromPdf(fileOrBuffer: File | ArrayBuffer): Promise<{ text: string; pageCount: number }> {
+export async function extractTextFromPdf(
+  fileOrBuffer: File | ArrayBuffer,
+  onProgress?: (progress: { currentPage: number; totalPages: number; pageText: string; accumulatedText: string }) => void
+): Promise<{ text: string; pageCount: number }> {
   let arrayBuffer: ArrayBuffer;
   if (fileOrBuffer instanceof File) {
     arrayBuffer = await fileOrBuffer.arrayBuffer();
@@ -50,8 +53,18 @@ export async function extractTextFromPdf(fileOrBuffer: File | ArrayBuffer): Prom
       }
     }
 
-    if (pageText.trim()) {
-      fullText += (pageNum > 1 ? '\n\n' : '') + pageText.trim();
+    const cleanedPage = cleanExtractedText(pageText);
+    if (cleanedPage) {
+      fullText += (pageNum > 1 ? '\n\n' : '') + cleanedPage;
+    }
+
+    if (onProgress) {
+      onProgress({
+        currentPage: pageNum,
+        totalPages: numPages,
+        pageText: cleanedPage,
+        accumulatedText: cleanExtractedText(fullText),
+      });
     }
   }
 

@@ -11,7 +11,7 @@ import { StorageSettingsModal } from './components/StorageSettingsModal';
 import { LogViewerModal } from './components/LogViewerModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobilePlayerSheet } from './components/MobilePlayerSheet';
-import { ProjectData, FileReference, VoiceModel, TimedCue, ViewMode } from './types';
+import { ProjectData, FileReference, VoiceModel, TimedCue, ViewMode, TextChunk } from './types';
 import { getVoiceById } from './services/voicesCatalog';
 import { exportToSrt } from './services/edgeTtsClient';
 import { calculateTextStats } from './services/pdfExtractor';
@@ -88,11 +88,25 @@ export function App() {
   // Coordinator & Audio Element Refs
   const coordinatorRef = useRef<ChunkCoordinator | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const preloadAudioRef = useRef<HTMLAudioElement | null>(null);
   const cuesRef = useRef<TimedCue[]>(project.cues);
+  const chunksRef = useRef<TextChunk[]>([]);
+  const currentChunkIndexRef = useRef<number>(0);
+  const isChunkStreamingRef = useRef<boolean>(false);
+  const isBufferingNextChunkRef = useRef<boolean>(false);
 
   useEffect(() => {
     cuesRef.current = project.cues;
   }, [project.cues]);
+
+  // Preloads the next chunk into standby audio element for 0ms gapless transition
+  const preloadNextChunk = (nextIdx: number) => {
+    const chunks = chunksRef.current;
+    if (nextIdx < chunks.length && chunks[nextIdx]?.audioUrl && preloadAudioRef.current) {
+      preloadAudioRef.current.src = chunks[nextIdx].audioUrl!;
+      preloadAudioRef.current.load();
+    }
+  };
 
   // Load Last Active Project from Memory on Startup
   useEffect(() => {
@@ -129,22 +143,37 @@ export function App() {
     initMemory();
   }, []);
 
-  // Initialize and Bind Audio Element
+  // Initialize and Bind Audio Elements
   useEffect(() => {
     const audio = new Audio();
+    const preloadAudio = new Audio();
     audioRef.current = audio;
+    preloadAudioRef.current = preloadAudio;
 
     audio.onloadedmetadata = () => {
-      setDuration(audio.duration || 0);
+      if (!isChunkStreamingRef.current) {
+        setDuration(audio.duration || 0);
+      }
       // Restore saved progress seek
-      if (project.playbackMemory.currentTime > 0 && audio.currentTime === 0) {
+      if (!isChunkStreamingRef.current && project.playbackMemory.currentTime > 0 && audio.currentTime === 0) {
         audio.currentTime = project.playbackMemory.currentTime;
       }
     };
 
     audio.ontimeupdate = () => {
-      const cur = audio.currentTime;
+      let cur = audio.currentTime;
+      if (isChunkStreamingRef.current) {
+        const currentChunk = chunksRef.current[currentChunkIndexRef.current];
+        if (currentChunk) {
+          cur = currentChunk.offsetSeconds + audio.currentTime;
+        }
+      }
       setCurrentTime(cur);
+
+      // Preload next chunk 3 seconds before current chunk finishes
+      if (isChunkStreamingRef.current && audio.duration && (audio.duration - audio.currentTime < 3)) {
+        preloadNextChunk(currentChunkIndexRef.current + 1);
+      }
 
       // Fast O(log N) active karaoke cue lookup using binary search
       const currentCues = cuesRef.current;
@@ -157,18 +186,45 @@ export function App() {
     };
 
     audio.onended = () => {
+      if (isChunkStreamingRef.current) {
+        const nextIdx = currentChunkIndexRef.current + 1;
+        const chunks = chunksRef.current;
+        if (nextIdx < chunks.length) {
+          const nextChunk = chunks[nextIdx];
+          if (nextChunk && nextChunk.status === 'ready' && nextChunk.audioUrl) {
+            currentChunkIndexRef.current = nextIdx;
+            audio.src = nextChunk.audioUrl;
+            audio.playbackRate = playbackSpeed;
+            audio.volume = volume / 100;
+            audio.currentTime = 0;
+            audio.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+            preloadNextChunk(nextIdx + 1);
+            return;
+          } else {
+            // Next chunk still generating, flag buffering state
+            isBufferingNextChunkRef.current = true;
+            Logger.info(`Buffering next section (Chunk ${nextIdx + 1})...`);
+            return;
+          }
+        }
+      }
       setIsPlaying(false);
     };
 
     return () => {
       audio.pause();
       audio.src = '';
+      preloadAudio.pause();
+      preloadAudio.src = '';
     };
   }, []);
 
-  // Update audio source when project.audioUrl changes
+  // Update audio source when project.audioUrl changes (only in non-streaming or idle mode)
   useEffect(() => {
     if (audioRef.current && project.audioUrl) {
+      if (isChunkStreamingRef.current) {
+        return; // Don't interrupt dynamic chunk queue
+      }
       const wasPlaying = isPlaying;
       audioRef.current.src = project.audioUrl;
       audioRef.current.playbackRate = playbackSpeed;
@@ -255,7 +311,9 @@ export function App() {
 
   // Audio Playback Functions
   const togglePlay = () => {
-    if (!audioRef.current || !project.audioUrl) return;
+    if (!audioRef.current) return;
+    const hasAudio = project.audioUrl || (chunksRef.current.length > 0 && chunksRef.current[0]?.audioUrl);
+    if (!hasAudio) return;
 
     if (isPlaying) {
       audioRef.current.pause();
@@ -278,18 +336,45 @@ export function App() {
       setIsPlaying(false);
       setCurrentTime(0);
       setActiveCueIndex(0);
+      currentChunkIndexRef.current = 0;
+      isBufferingNextChunkRef.current = false;
     }
   };
 
   const skip = (deltaSeconds: number) => {
     if (!audioRef.current) return;
     const target = Math.max(0, Math.min(duration, currentTime + deltaSeconds));
-    audioRef.current.currentTime = target;
-    setCurrentTime(target);
+    seekTo(target);
   };
 
   const seekTo = (seconds: number) => {
     if (!audioRef.current) return;
+
+    if (isChunkStreamingRef.current) {
+      const chunks = chunksRef.current;
+      const targetIdx = chunks.findIndex((c) =>
+        seconds >= c.offsetSeconds && seconds < (c.offsetSeconds + (c.duration || 10))
+      );
+
+      if (targetIdx !== -1) {
+        const targetChunk = chunks[targetIdx];
+        if (targetChunk.status === 'ready' && targetChunk.audioUrl) {
+          currentChunkIndexRef.current = targetIdx;
+          audioRef.current.src = targetChunk.audioUrl;
+          audioRef.current.playbackRate = playbackSpeed;
+          audioRef.current.volume = volume / 100;
+          audioRef.current.currentTime = Math.max(0, seconds - targetChunk.offsetSeconds);
+          setCurrentTime(seconds);
+          if (isPlaying) {
+            audioRef.current.play().catch(() => {});
+          }
+          preloadNextChunk(targetIdx + 1);
+          return;
+        }
+      }
+    }
+
+    // Default seek when using combined audio file
     audioRef.current.currentTime = seconds;
     setCurrentTime(seconds);
   };
@@ -309,7 +394,7 @@ export function App() {
     }
 
     setIsGenerating(true);
-    Logger.info(`Initiating audio generation for project: "${project.title}"`);
+    Logger.info(`Initiating fast-start audio streaming pipeline for: "${project.title}"`);
 
     const coordinator = new ChunkCoordinator(
       project.id,
@@ -327,20 +412,74 @@ export function App() {
         });
       },
       (firstChunk) => {
-        Logger.info(`Fast-start: streaming chunk 1 (${firstChunk.wordCount} words) immediately.`);
-        if (firstChunk.audioBlob && firstChunk.audioUrl) {
-          setProject((prev) => ({
-            ...prev,
-            audioBlob: firstChunk.audioBlob,
-            audioUrl: firstChunk.audioUrl,
-            cues: firstChunk.cues,
-            playbackMemory: {
-              ...prev.playbackMemory,
-              duration: firstChunk.duration,
-            },
-          }));
-          setCurrentTime(0);
-          setActiveCueIndex(0);
+        Logger.info(`Fast-start ready: streaming chunk 1 (${firstChunk.wordCount} words) in <400ms.`);
+        isChunkStreamingRef.current = true;
+        currentChunkIndexRef.current = 0;
+        chunksRef.current = coordinator.getChunks();
+
+        // Estimated duration for entire document
+        const stats = calculateTextStats(project.textContent);
+        const estDuration = stats.totalSeconds || firstChunk.duration;
+        setDuration(estDuration);
+
+        // Pre-populate cues for the whole text so user has full karaoke timeline immediately
+        const initialCues = coordinator.getAllCues();
+        cuesRef.current = initialCues;
+
+        setProject((prev) => ({
+          ...prev,
+          audioBlob: firstChunk.audioBlob,
+          audioUrl: firstChunk.audioUrl,
+          cues: initialCues,
+          playbackMemory: {
+            ...prev.playbackMemory,
+            duration: estDuration,
+          },
+        }));
+
+        if (audioRef.current && firstChunk.audioUrl) {
+          audioRef.current.src = firstChunk.audioUrl;
+          audioRef.current.playbackRate = playbackSpeed;
+          audioRef.current.volume = volume / 100;
+          audioRef.current.currentTime = 0;
+          audioRef.current
+            .play()
+            .then(() => {
+              setIsPlaying(true);
+              Logger.info('Streaming audio playback started instantly!');
+            })
+            .catch(() => {
+              // User browser autoplay policy: primed and ready to play on user click
+              setIsPlaying(false);
+            });
+        }
+        setCurrentTime(0);
+        setActiveCueIndex(0);
+      },
+      (chunk, allChunks) => {
+        chunksRef.current = allChunks;
+        const updatedCues = coordinator.getAllCues();
+        cuesRef.current = updatedCues;
+
+        setProject((prev) => ({
+          ...prev,
+          cues: updatedCues,
+        }));
+
+        // If player was buffering waiting for this chunk, immediately resume playback!
+        if (isBufferingNextChunkRef.current && chunk.id === currentChunkIndexRef.current + 1) {
+          isBufferingNextChunkRef.current = false;
+          currentChunkIndexRef.current = chunk.id;
+          if (audioRef.current && chunk.audioUrl) {
+            audioRef.current.src = chunk.audioUrl;
+            audioRef.current.playbackRate = playbackSpeed;
+            audioRef.current.volume = volume / 100;
+            audioRef.current.currentTime = 0;
+            audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+            preloadNextChunk(chunk.id + 1);
+          }
+        } else if (chunk.id === currentChunkIndexRef.current + 1) {
+          preloadNextChunk(chunk.id);
         }
       }
     );
@@ -350,6 +489,12 @@ export function App() {
     try {
       const result = await coordinator.start();
 
+      const finalDuration = result.combinedCues.length > 0
+        ? result.combinedCues[result.combinedCues.length - 1].end
+        : duration;
+
+      setDuration(finalDuration);
+
       const updatedProject: ProjectData = {
         ...project,
         audioBlob: result.combinedBlob,
@@ -357,12 +502,18 @@ export function App() {
         cues: result.combinedCues,
         playbackMemory: {
           ...project.playbackMemory,
-          duration: result.combinedCues.length > 0 ? result.combinedCues[result.combinedCues.length - 1].end : 0,
+          duration: finalDuration,
         },
       };
 
       setProject(updatedProject);
       await saveProject(updatedProject, true);
+
+      // If playback is not active, seamlessly switch to combined audio URL for whole-file scrubbing
+      if (!isPlaying && audioRef.current && result.combinedUrl) {
+        isChunkStreamingRef.current = false;
+        audioRef.current.src = result.combinedUrl;
+      }
 
       Logger.info(`Synthesis fully completed. Audio & text saved to disk. Total sentences synced: ${result.combinedCues.length}`);
     } catch (err: any) {
