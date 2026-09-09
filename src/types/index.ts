@@ -45,6 +45,13 @@ export interface ShadowGenSettings {
   concurrencyMode: 'auto' | 'aggressive' | 'potato'; // auto detects CPU, aggressive pre-generates all, potato does 1 next
 }
 
+export interface PlaybackMemory {
+  currentTime: number;
+  duration: number;
+  activeCueIndex: number;
+  percentCompleted: number;
+}
+
 export interface ProjectData {
   id: string;
   title: string;
@@ -62,12 +69,7 @@ export interface ProjectData {
   audioBlob?: Blob;
   audioUrl?: string;
   cues: TimedCue[];
-  playbackMemory: {
-    currentTime: number;
-    duration: number;
-    activeCueIndex: number;
-    percentCompleted: number;
-  };
+  playbackMemory: PlaybackMemory;
 }
 
 export interface LogEntry {

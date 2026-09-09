@@ -24,8 +24,20 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 }) => {
   const [tab, setTab] = useState<'karaoke' | 'edit'>('karaoke');
   const [copied, setCopied] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(700);
   const activeSentenceRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  };
+
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      setContainerHeight(scrollContainerRef.current.clientHeight || 700);
+    }
+  }, []);
 
   // Auto-scroll to active sentence in karaoke mode
   useEffect(() => {
@@ -36,6 +48,37 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       });
     }
   }, [activeCueIndex, tab]);
+
+  // Virtualized window calculation for large projects
+  const ITEM_HEIGHT = 80;
+  const BUFFER = 25;
+  const isVirtualized = cues.length > 60;
+
+  let startIndex = 0;
+  let endIndex = cues.length;
+  let topSpacer = 0;
+  let bottomSpacer = 0;
+
+  if (isVirtualized) {
+    const rawStart = Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER;
+    const rawEnd = Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + BUFFER;
+    startIndex = Math.max(0, rawStart);
+    endIndex = Math.min(cues.length, rawEnd);
+
+    // Guarantee the active cue is ALWAYS in the DOM so it can be scrolled and highlighted
+    if (activeCueIndex >= 0) {
+      if (activeCueIndex < startIndex) {
+        startIndex = Math.max(0, activeCueIndex - 10);
+      } else if (activeCueIndex >= endIndex) {
+        endIndex = Math.min(cues.length, activeCueIndex + 10);
+      }
+    }
+
+    topSpacer = startIndex * ITEM_HEIGHT;
+    bottomSpacer = Math.max(0, (cues.length - endIndex) * ITEM_HEIGHT);
+  }
+
+  const visibleCues = isVirtualized ? cues.slice(startIndex, endIndex) : cues;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(textContent);
@@ -128,6 +171,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
       {/* Main Content Area */}
       <div
         ref={scrollContainerRef}
+        onScroll={handleScroll}
         className="flex-1 p-6 overflow-y-auto custom-scrollbar flex flex-col no-drag select-text"
         style={{ WebkitAppRegion: 'no-drag' } as any}
       >
@@ -152,7 +196,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
           />
         ) : (
           /* Karaoke Synchronized View */
-          <div className="max-w-3xl mx-auto space-y-3">
+          <div className="max-w-3xl mx-auto space-y-3 w-full">
             {cues.length === 0 ? (
               <div className="text-center py-20 text-slate-500 text-sm space-y-3">
                 <Mic className="w-10 h-10 mx-auto text-slate-600 opacity-60" />
@@ -162,45 +206,50 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                 </p>
               </div>
             ) : (
-              cues.map((cue, idx) => {
-                const isActive = idx === activeCueIndex;
-                const isPast = idx < activeCueIndex;
+              <>
+                {topSpacer > 0 && <div style={{ height: topSpacer }} aria-hidden="true" />}
+                {visibleCues.map((cue, offsetIdx) => {
+                  const idx = startIndex + offsetIdx;
+                  const isActive = idx === activeCueIndex;
+                  const isPast = idx < activeCueIndex;
 
-                return (
-                  <div
-                    key={cue.id}
-                    ref={isActive ? activeSentenceRef : null}
-                    onClick={() => onSeekToCue(cue)}
-                    className={`p-3.5 rounded-xl transition-all duration-300 cursor-pointer text-sm leading-relaxed border select-text ${
-                      isActive
-                        ? 'bg-cyan-950/50 border-cyan-400 text-white shadow-[0_0_20px_rgba(56,189,248,0.25)] scale-[1.01]'
-                        : isPast
-                        ? 'bg-slate-950/20 border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800/40'
-                        : 'bg-slate-950/30 border-transparent text-slate-300 hover:bg-slate-800/40 hover:text-white'
-                    }`}
-                  >
-                    {/* Timestamp & Active Indicator Badge */}
-                    <div className="flex items-center justify-between text-[11px] mb-1.5 select-none font-mono">
-                      <span className={`inline-flex items-center space-x-1.5 ${isActive ? 'text-cyan-400 font-semibold' : 'text-slate-500'}`}>
-                        {isActive && <Play className="w-3 h-3 fill-cyan-400 animate-pulse" />}
-                        <span>{formatTime(cue.start)}</span>
-                        {isActive && (
-                          <span className="px-1.5 py-0.2 rounded bg-cyan-900/60 text-cyan-300 text-[10px] ml-1">
-                            NOW PLAYING • LINE {idx + 1}/{cues.length}
-                          </span>
-                        )}
-                      </span>
-                      <span className="text-[10px] text-slate-600 hover:text-slate-400">
-                        Jump here
-                      </span>
+                  return (
+                    <div
+                      key={cue.id}
+                      ref={isActive ? activeSentenceRef : null}
+                      onClick={() => onSeekToCue(cue)}
+                      className={`p-3.5 rounded-xl transition-all duration-300 cursor-pointer text-sm leading-relaxed border select-text ${
+                        isActive
+                          ? 'bg-cyan-950/50 border-cyan-400 text-white shadow-[0_0_20px_rgba(56,189,248,0.25)] scale-[1.01]'
+                          : isPast
+                          ? 'bg-slate-950/20 border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800/40'
+                          : 'bg-slate-950/30 border-transparent text-slate-300 hover:bg-slate-800/40 hover:text-white'
+                      }`}
+                    >
+                      {/* Timestamp & Active Indicator Badge */}
+                      <div className="flex items-center justify-between text-[11px] mb-1.5 select-none font-mono">
+                        <span className={`inline-flex items-center space-x-1.5 ${isActive ? 'text-cyan-400 font-semibold' : 'text-slate-500'}`}>
+                          {isActive && <Play className="w-3 h-3 fill-cyan-400 animate-pulse" />}
+                          <span>{formatTime(cue.start)}</span>
+                          {isActive && (
+                            <span className="px-1.5 py-0.2 rounded bg-cyan-900/60 text-cyan-300 text-[10px] ml-1">
+                              NOW PLAYING • LINE {idx + 1}/{cues.length}
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-[10px] text-slate-600 hover:text-slate-400">
+                          Jump here
+                        </span>
+                      </div>
+
+                      <p className={isActive ? 'font-medium text-slate-50' : ''}>
+                        {cue.text}
+                      </p>
                     </div>
-
-                    <p className={isActive ? 'font-medium text-slate-50' : ''}>
-                      {cue.text}
-                    </p>
-                  </div>
-                );
-              })
+                  );
+                })}
+                {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} aria-hidden="true" />}
+              </>
             )}
           </div>
         )}

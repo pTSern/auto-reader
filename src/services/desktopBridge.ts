@@ -27,6 +27,8 @@ declare global {
         save_combined_audio?: (projectId: string, base64Data: string) => Promise<boolean>;
         check_chunk_cache?: (projectId: string, chunkId: number) => Promise<boolean>;
         get_chunk_audio?: (projectId: string, chunkId: number) => Promise<string | null>;
+        get_chunk_audio_url?: (projectId: string, chunkId: number) => Promise<string | null>;
+        get_combined_audio_url?: (projectId: string) => Promise<string | null>;
         delete_project_from_disk?: (projectId: string) => Promise<boolean>;
         synthesize_edge_tts?: (
           text: string,
@@ -229,6 +231,28 @@ export const DesktopBridge = {
         }
       } catch (e) {
         console.warn('Failed to get chunk audio', e);
+      }
+    }
+    return null;
+  },
+
+  async getChunkAudioUrl(projectId: string, chunkId: number): Promise<string | null> {
+    if (window.pywebview?.api?.get_chunk_audio_url) {
+      try {
+        return await window.pywebview.api.get_chunk_audio_url(projectId, chunkId);
+      } catch (e) {
+        console.warn('Failed to get chunk audio URL', e);
+      }
+    }
+    return null;
+  },
+
+  async getCombinedAudioUrl(projectId: string): Promise<string | null> {
+    if (window.pywebview?.api?.get_combined_audio_url) {
+      try {
+        return await window.pywebview.api.get_combined_audio_url(projectId);
+      } catch (e) {
+        console.warn('Failed to get combined audio URL', e);
       }
     }
     return null;

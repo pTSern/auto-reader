@@ -1,0 +1,149 @@
+"""
+Local HTTP Media Server for VoiceFlow Studio.
+Provides zero-overhead streaming of MP3 audio files directly from disk to the WebView2 browser.
+Supports HTTP 206 Partial Content (Range requests) for native scrubbing and instant playback.
+"""
+
+import os
+import re
+import urllib.parse
+import mimetypes
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+import threading
+
+MEDIA_PORT = 5174
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+class MediaServerHandler(BaseHTTPRequestHandler):
+    storage_dir_provider = None
+
+    def log_message(self, format, *args):
+        # Suppress noisy HTTP request logging in terminal
+        pass
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Range, Content-Type")
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+
+    def do_HEAD(self):
+        self.handle_file_request(send_body=False)
+
+    def do_GET(self):
+        self.handle_file_request(send_body=True)
+
+    def handle_file_request(self, send_body: bool = True):
+        # 1. Parse and validate URL path
+        parsed_url = urllib.parse.urlparse(self.path)
+        clean_path = urllib.parse.unquote(parsed_url.path).lstrip("/")
+
+        # Security check against directory traversal
+        if ".." in clean_path:
+            self.send_error(403, "Access Denied")
+            return
+
+        base_storage = self.storage_dir_provider() if callable(self.storage_dir_provider) else ""
+        if not base_storage or not os.path.exists(base_storage):
+            self.send_error(500, "Storage Directory Not Initialized")
+            return
+
+        file_path = os.path.abspath(os.path.join(base_storage, clean_path))
+        # Ensure file_path is within base_storage
+        if not file_path.startswith(os.path.abspath(base_storage)):
+            self.send_error(403, "Forbidden Path")
+            return
+
+        if not os.path.isfile(file_path):
+            self.send_error(404, "File Not Found")
+            return
+
+        file_size = os.path.getsize(file_path)
+        content_type, _ = mimetypes.guess_type(file_path)
+        if not content_type:
+            if file_path.endswith(".mp3"):
+                content_type = "audio/mpeg"
+            elif file_path.endswith(".json"):
+                content_type = "application/json"
+            else:
+                content_type = "application/octet-stream"
+
+        range_header = self.headers.get("Range")
+
+        if range_header:
+            # Handle HTTP Range request (206 Partial Content)
+            match = re.search(r"bytes=(\d+)-(\d*)", range_header)
+            if match:
+                start = int(match.group(1))
+                end = int(match.group(2)) if match.group(2) else file_size - 1
+                end = min(end, file_size - 1)
+
+                if start > end or start >= file_size:
+                    self.send_error(416, "Requested Range Not Satisfiable")
+                    return
+
+                length = end - start + 1
+
+                self.send_response(206)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+
+                if send_body:
+                    try:
+                        with open(file_path, "rb") as f:
+                            f.seek(start)
+                            remaining = length
+                            chunk_size = 64 * 1024
+                            while remaining > 0:
+                                to_read = min(chunk_size, remaining)
+                                chunk = f.read(to_read)
+                                if not chunk:
+                                    break
+                                self.wfile.write(chunk)
+                                remaining -= len(chunk)
+                    except (ConnectionResetError, BrokenPipeError):
+                        # Client stopped audio / scrubbed
+                        pass
+                return
+
+        # Normal 200 OK request
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(file_size))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        if send_body:
+            try:
+                with open(file_path, "rb") as f:
+                    chunk_size = 64 * 1024
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+
+
+def start_media_server(storage_dir_provider, port: int = MEDIA_PORT) -> ThreadingHTTPServer:
+    """Starts the media streaming server in a background daemon thread"""
+    handler = MediaServerHandler
+    handler.storage_dir_provider = staticmethod(storage_dir_provider)
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True, name="MediaStreamingServer")
+    thread.start()
+    return server

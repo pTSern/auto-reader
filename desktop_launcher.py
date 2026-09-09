@@ -9,6 +9,7 @@ from ctypes import wintypes
 from datetime import datetime
 import webview
 import edge_tts
+from media_server import start_media_server, MEDIA_PORT
 
 HWND_TOPMOST = -1
 HWND_NOTOPMOST = -2
@@ -20,13 +21,26 @@ LOG_FILE_PATH = os.path.join(BASE_DIR, "app.log")
 CONFIG_FILE_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_STORAGE_DIR = os.path.join(BASE_DIR, "projects_data")
 
+_MEDIA_SERVER_STARTED = False
 
 class DesktopApi:
     def __init__(self, window=None):
         self.window = window
         self.is_maximized = False
+        self.media_port = MEDIA_PORT
         self._init_logfile()
         self._init_config()
+        self._init_media_server()
+
+    def _init_media_server(self):
+        global _MEDIA_SERVER_STARTED
+        if not _MEDIA_SERVER_STARTED:
+            try:
+                start_media_server(self.get_storage_dir, port=self.media_port)
+                _MEDIA_SERVER_STARTED = True
+                self.write_log("info", f"Media streaming server listening on http://127.0.0.1:{self.media_port}")
+            except Exception as e:
+                self.write_log("error", f"Could not start media server: {e}")
 
     def _init_logfile(self):
         try:
@@ -191,7 +205,10 @@ class DesktopApi:
                             # Check if audio exists on disk
                             mp3_path = os.path.join(p_dir, folder, "combined.mp3")
                             p_data["hasDiskAudio"] = os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0
-                            projects.push(p_data) if hasattr(projects, 'push') else projects.append(p_data)
+                            if p_data["hasDiskAudio"]:
+                                mtime = int(os.path.getmtime(mp3_path))
+                                p_data["audioHttpUrl"] = f"http://127.0.0.1:{self.media_port}/projects/{folder}/combined.mp3?t={mtime}"
+                            projects.append(p_data)
                     except Exception as err:
                         print(f"Error loading {fp}: {err}")
 
@@ -201,7 +218,7 @@ class DesktopApi:
         return projects
 
     def load_project_from_disk(self, project_id: str):
-        """Loads a single project from disk, including its combined MP3 if available"""
+        """Loads a single project from disk, including its combined MP3 streaming HTTP URL if available"""
         try:
             p_dir = os.path.join(self.get_storage_dir(), "projects", project_id)
             json_path = os.path.join(p_dir, "project.json")
@@ -214,10 +231,10 @@ class DesktopApi:
             # Check if combined.mp3 exists on disk
             mp3_path = os.path.join(p_dir, "combined.mp3")
             if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
-                with open(mp3_path, "rb") as af:
-                    b64 = base64.b64encode(af.read()).decode("ascii")
-                    p_data["diskAudioBase64"] = f"data:audio/mp3;base64,{b64}"
-                    p_data["hasDiskAudio"] = True
+                mtime = int(os.path.getmtime(mp3_path))
+                p_data["hasDiskAudio"] = True
+                p_data["audioHttpUrl"] = f"http://127.0.0.1:{self.media_port}/projects/{project_id}/combined.mp3?t={mtime}"
+                p_data["diskAudioBase64"] = None
             else:
                 p_data["hasDiskAudio"] = False
 
@@ -267,6 +284,17 @@ class DesktopApi:
             self.write_log("error", f"Error saving combined audio: {e}")
             return False
 
+    def get_combined_audio_url(self, project_id: str) -> str | None:
+        """Returns HTTP streaming URL for a project's combined MP3"""
+        try:
+            mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "combined.mp3")
+            if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
+                mtime = int(os.path.getmtime(mp3_path))
+                return f"http://127.0.0.1:{self.media_port}/projects/{project_id}/combined.mp3?t={mtime}"
+        except Exception as e:
+            print(f"Error getting combined audio URL: {e}")
+        return None
+
     def check_chunk_cache(self, project_id: str, chunk_id: int) -> bool:
         """Checks if a chunk MP3 file already exists on disk and is non-empty"""
         try:
@@ -275,8 +303,19 @@ class DesktopApi:
         except Exception:
             return False
 
+    def get_chunk_audio_url(self, project_id: str, chunk_id: int) -> str | None:
+        """Returns HTTP streaming URL for a cached chunk"""
+        try:
+            mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
+            if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
+                mtime = int(os.path.getmtime(mp3_path))
+                return f"http://127.0.0.1:{self.media_port}/projects/{project_id}/chunks/chunk_{chunk_id}.mp3?t={mtime}"
+        except Exception as e:
+            print(f"Error getting chunk audio URL: {e}")
+        return None
+
     def get_chunk_audio(self, project_id: str, chunk_id: int) -> str | None:
-        """Loads a cached chunk's MP3 file from disk as base64 data URI"""
+        """Loads a cached chunk's MP3 file from disk as base64 data URI (fallback)"""
         try:
             mp3_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
             if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:

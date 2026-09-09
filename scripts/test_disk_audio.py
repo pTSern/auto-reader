@@ -110,8 +110,19 @@ def main():
     assert loaded is not None, "Failed to load project from disk"
     assert loaded["title"] == "Quantum Physics Audio Lecture"
     assert loaded["hasDiskAudio"] is True
-    assert loaded["diskAudioBase64"].startswith("data:audio/mp3;base64,")
-    print(f"- Successfully reloaded '{loaded['title']}' with disk MP3 audio restored!")
+    assert "audioHttpUrl" in loaded and loaded["audioHttpUrl"].startswith(f"http://127.0.0.1:{api.media_port}/")
+    print(f"- Audio HTTP Streaming URL: {loaded['audioHttpUrl']}")
+    
+    # Verify the audio stream works via HTTP Range
+    import urllib.request
+    req = urllib.request.Request(loaded["audioHttpUrl"], headers={"Range": "bytes=0-99"})
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 206
+        chunk = resp.read()
+        assert len(chunk) == 100
+        print("- Streamed 100 bytes via HTTP 206 Partial Content successfully!")
+
+    print(f"- Successfully reloaded '{loaded['title']}' with disk MP3 streaming URL restored!")
 
     # 7. Verify List All Projects on Disk
     all_disk_projects = api.load_all_projects_from_disk()
