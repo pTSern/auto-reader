@@ -8,6 +8,10 @@ export default defineConfig({
     port: 5173,
     host: true,
   },
+  preview: {
+    port: 4173,
+    host: true,
+  },
   optimizeDeps: {
     include: ['pdfjs-dist'],
   },
