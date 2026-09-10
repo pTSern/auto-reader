@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Settings, Check, Volume2, FastForward, Sliders, Layers, Sparkles } from 'lucide-react';
+import { X, Settings, Check, Volume2, FastForward, Sliders, Layers, Sparkles, Zap } from 'lucide-react';
 import { ProjectData } from '../types';
 
 interface ProjectSettingsModalProps {
@@ -25,6 +25,7 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
   const [concurrencyMode, setConcurrencyMode] = useState<'auto' | 'aggressive' | 'potato'>(
     project.shadowSettings?.concurrencyMode ?? 'auto'
   );
+  const [syncOffsetSec, setSyncOffsetSec] = useState<number>(project.swiftSettings?.syncOffsetSec ?? 0.20);
 
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -39,6 +40,7 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
       setChunkSizeWords(project.shadowSettings?.chunkSizeWords ?? 500);
       setUseFastStartLadder(project.shadowSettings?.useFastStartLadder ?? true);
       setConcurrencyMode(project.shadowSettings?.concurrencyMode ?? 'auto');
+      setSyncOffsetSec(project.swiftSettings?.syncOffsetSec ?? 0.20);
       setSavedSuccess(false);
     }
   }, [isOpen, project]);
@@ -64,6 +66,10 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
         chunkSizeWords,
         useFastStartLadder,
         concurrencyMode,
+      },
+      swiftSettings: {
+        ...project.swiftSettings,
+        syncOffsetSec,
       },
       updatedAt: Date.now(),
     };
@@ -245,6 +251,75 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
                     {mode}
                   </button>
                 ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Swift Reading Sync Offset */}
+          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Zap className="w-4 h-4 text-amber-400" />
+                <h4 className="text-xs font-semibold text-white uppercase tracking-wider">
+                  Swift Reading & Subtitle Sync Offset
+                </h4>
+              </div>
+              <span
+                className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${
+                  syncOffsetSec > 0
+                    ? 'bg-amber-950/80 border border-amber-400/60 text-amber-300'
+                    : syncOffsetSec < 0
+                    ? 'bg-blue-950/80 border border-blue-400/60 text-blue-300'
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                {syncOffsetSec > 0
+                  ? `+${syncOffsetSec.toFixed(2)}s (Faster / Lead)`
+                  : syncOffsetSec < 0
+                  ? `${syncOffsetSec.toFixed(2)}s (Delayed / Slower)`
+                  : '0.00s (Exact)'}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Compensates for speaker audio latency. Positive values display text faster/earlier before audio plays. Negative values delay text.
+            </p>
+
+            <div className="space-y-1.5 pt-1">
+              <input
+                type="range"
+                min={-0.60}
+                max={0.60}
+                step={0.05}
+                value={syncOffsetSec}
+                onChange={(e) => setSyncOffsetSec(parseFloat(e.target.value))}
+                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
+              />
+              <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                <span>-0.60s (Slower)</span>
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setSyncOffsetSec(0.0)}
+                    className="hover:text-slate-300 underline"
+                  >
+                    0.0s (Exact)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSyncOffsetSec(0.20)}
+                    className="hover:text-slate-300 underline"
+                  >
+                    +0.20s
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSyncOffsetSec(0.25)}
+                    className="text-amber-400 hover:text-amber-300 underline font-semibold"
+                  >
+                    +0.25s (Recommended)
+                  </button>
+                </div>
+                <span>+0.60s (Faster)</span>
               </div>
             </div>
           </div>

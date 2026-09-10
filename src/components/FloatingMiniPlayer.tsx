@@ -24,6 +24,8 @@ interface FloatingMiniPlayerProps {
   onExpand: () => void;
   isSwiftRead?: boolean;
   onToggleSwiftRead?: () => void;
+  syncOffsetSec?: number;
+  onSyncOffsetChange?: (offset: number) => void;
 }
 
 export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
@@ -47,6 +49,8 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
   onExpand,
   isSwiftRead = false,
   onToggleSwiftRead,
+  syncOffsetSec = 0.20,
+  onSyncOffsetChange,
 }) => {
   const progressBarRef = useRef<HTMLDivElement>(null);
 
@@ -84,11 +88,12 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
 
   const currentWordIndex = useMemo(() => {
     if (!activeCue || words.length === 0) return 0;
+    const effectiveTime = Math.max(0, currentTime + syncOffsetSec);
     const cueDuration = Math.max(0.1, activeCue.end - activeCue.start);
-    const elapsed = Math.max(0, currentTime - activeCue.start);
+    const elapsed = Math.max(0, effectiveTime - activeCue.start);
     const progress = Math.min(0.999, elapsed / cueDuration);
     return Math.min(words.length - 1, Math.floor(progress * words.length));
-  }, [activeCue, currentTime, words.length]);
+  }, [activeCue, currentTime, syncOffsetSec, words.length]);
 
   const currentWord = words[currentWordIndex] || (activeCue ? activeCue.text : (trackTitle || 'VoiceFlow'));
   const orpIdx = getOrpIndex(currentWord);
@@ -145,6 +150,32 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
               <Zap className={`w-3 h-3 ${isSwiftRead ? 'fill-amber-400 text-amber-400' : ''}`} />
               <span>SWIFT</span>
             </button>
+          )}
+
+          {/* Real-time Sync Offset Calibration Stepper (Faster/Slower) */}
+          {isSwiftRead && onSyncOffsetChange && (
+            <div
+              className="flex items-center space-x-0.5 bg-slate-900 border border-slate-700/80 rounded px-1 py-0.5 text-[10px] font-mono text-amber-300 shadow-sm"
+              title="Adjust Swift sync offset: positive = earlier/faster, negative = delayed/slower"
+            >
+              <button
+                onClick={() => onSyncOffsetChange(parseFloat((syncOffsetSec - 0.05).toFixed(2)))}
+                className="px-0.5 text-slate-400 hover:text-white transition active:scale-90 font-bold"
+                title="Delay text / slower (-0.05s)"
+              >
+                -
+              </button>
+              <span className="font-semibold px-0.5 min-w-[34px] text-center select-none">
+                {syncOffsetSec > 0 ? `+${syncOffsetSec.toFixed(2)}s` : `${syncOffsetSec.toFixed(2)}s`}
+              </span>
+              <button
+                onClick={() => onSyncOffsetChange(parseFloat((syncOffsetSec + 0.05).toFixed(2)))}
+                className="px-0.5 text-slate-400 hover:text-white transition active:scale-90 font-bold"
+                title="Advance text / un-delay (+0.05s)"
+              >
+                +
+              </button>
+            </div>
           )}
 
           {/* Pin Toggle */}

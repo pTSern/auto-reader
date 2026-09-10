@@ -80,6 +80,14 @@ export function App() {
       return false;
     }
   });
+  const [syncOffsetSec, setSyncOffsetSec] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('voiceflow_sync_offset_sec');
+      return saved !== null ? parseFloat(saved) : 0.20;
+    } catch {
+      return 0.20;
+    }
+  });
   const [isPinned, setIsPinned] = useState<boolean>(false);
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState<boolean>(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState<boolean>(false);
@@ -128,10 +136,14 @@ export function App() {
   const currentTimeRef = useRef<number>(currentTime);
   const durationRef = useRef<number>(duration);
   const activeCueIndexRef = useRef<number>(activeCueIndex);
+  const syncOffsetSecRef = useRef<number>(syncOffsetSec);
   const lastSavedTimeRef = useRef<number>(0);
 
   useEffect(() => {
     projectIdRef.current = project.id;
+    if (project.swiftSettings?.syncOffsetSec !== undefined) {
+      setSyncOffsetSec(project.swiftSettings.syncOffsetSec);
+    }
   }, [project.id]);
 
   useEffect(() => {
@@ -145,6 +157,10 @@ export function App() {
   useEffect(() => {
     activeCueIndexRef.current = activeCueIndex;
   }, [activeCueIndex]);
+
+  useEffect(() => {
+    syncOffsetSecRef.current = syncOffsetSec;
+  }, [syncOffsetSec]);
 
   useEffect(() => {
     cuesRef.current = project.cues;
@@ -208,11 +224,12 @@ export function App() {
         preloadNextChunk(currentChunkIndexRef.current + 1);
       }
 
-      // Fast O(log N) active subtitle cue lookup using binary search
+      // Fast O(log N) active subtitle cue lookup using binary search (with sync offset lead/lag)
       const currentCues = cuesRef.current;
       let activeIdx = activeCueIndexRef.current;
       if (currentCues && currentCues.length > 0) {
-        const idx = findActiveCueIndex(currentCues, cur);
+        const effectiveCur = Math.max(0, cur + syncOffsetSecRef.current);
+        const idx = findActiveCueIndex(currentCues, effectiveCur);
         if (idx !== -1) {
           activeIdx = idx;
           setActiveCueIndex(idx);
@@ -940,6 +957,22 @@ export function App() {
     }
   };
 
+  const handleSyncOffsetChange = (val: number) => {
+    const clamped = Math.max(-1.0, Math.min(1.0, parseFloat(val.toFixed(2))));
+    setSyncOffsetSec(clamped);
+    syncOffsetSecRef.current = clamped;
+    try {
+      localStorage.setItem('voiceflow_sync_offset_sec', String(clamped));
+    } catch {}
+    setProject((p) => ({
+      ...p,
+      swiftSettings: {
+        ...p.swiftSettings,
+        syncOffsetSec: clamped,
+      },
+    }));
+  };
+
   const handleTogglePin = async () => {
     const nextPin = !isPinned;
     setIsPinned(nextPin);
@@ -1080,6 +1113,8 @@ export function App() {
           onExpand={() => handleToggleViewMode()}
           isSwiftRead={isSwiftRead}
           onToggleSwiftRead={handleToggleSwiftRead}
+          syncOffsetSec={syncOffsetSec}
+          onSyncOffsetChange={handleSyncOffsetChange}
         />
       ) : (
         /* Full Application Layout (16:9 Desktop & Adaptive Mobile) */

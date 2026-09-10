@@ -101,6 +101,9 @@ export interface ProjectData {
   cues: TimedCue[];
   playbackMemory: PlaybackMemory;
   voiceTracks?: Record<string, VoiceTrackData>;
+  swiftSettings?: {
+    syncOffsetSec?: number; // Timing lead/lag offset in seconds (e.g. +0.25 displays text 0.25s faster)
+  };
 }
 
 export interface LogEntry {
