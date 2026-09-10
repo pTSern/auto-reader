@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pin, Minimize2, FolderKanban, Volume2, Terminal, Minus, Square, X, HardDrive, Settings } from 'lucide-react';
+import { Pin, Minimize2, FolderKanban, Volume2, Terminal, Minus, Square, X, HardDrive, Settings, Zap } from 'lucide-react';
 import { ViewMode } from '../types';
 import { DesktopBridge } from '../services/desktopBridge';
 
@@ -13,6 +13,8 @@ interface TitleBarProps {
   onOpenLogs: () => void;
   onOpenStorageSettings: () => void;
   projectTitle: string;
+  isSwiftRead?: boolean;
+  onToggleSwiftRead?: () => void;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
@@ -25,6 +27,8 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onOpenLogs,
   onOpenStorageSettings,
   projectTitle,
+  isSwiftRead = false,
+  onToggleSwiftRead,
 }) => {
   const isDesktop = DesktopBridge.isDesktop();
 
@@ -105,6 +109,22 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <Pin className={`w-3.5 h-3.5 ${isPinned ? 'rotate-45 fill-cyan-400 text-cyan-400' : ''}`} />
           <span className="hidden sm:inline">{isPinned ? 'Pinned' : 'Pin'}</span>
         </button>
+
+        {/* SwiftRead Mode Toggle */}
+        {onToggleSwiftRead && (
+          <button
+            onClick={onToggleSwiftRead}
+            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition border ${
+              isSwiftRead
+                ? 'bg-amber-950/80 border-amber-400 text-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.3)]'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+            }`}
+            title={isSwiftRead ? 'Swift Reading mode is ON' : 'Turn on Swift Reading mode (RSVP)'}
+          >
+            <Zap className={`w-3.5 h-3.5 ${isSwiftRead ? 'fill-amber-400 text-amber-400' : ''}`} />
+            <span className="hidden sm:inline">Swift</span>
+          </button>
+        )}
 
         {/* Mini-Player Toggle */}
         <button

@@ -73,6 +73,13 @@ export function App() {
 
   // UI State
   const [viewMode, setViewMode] = useState<ViewMode>('full');
+  const [isSwiftRead, setIsSwiftRead] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('voiceflow_swift_read') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [isPinned, setIsPinned] = useState<boolean>(false);
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState<boolean>(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState<boolean>(false);
@@ -915,11 +922,22 @@ export function App() {
     a.click();
   };
 
-  // Mini-Player & Pin Handlers
+  // Mini-Player, SwiftRead & Pin Handlers
   const handleToggleViewMode = async () => {
     const nextMode: ViewMode = viewMode === 'full' ? 'mini' : 'full';
     setViewMode(nextMode);
-    await DesktopBridge.setMiniMode(nextMode === 'mini');
+    await DesktopBridge.setMiniMode(nextMode === 'mini', isSwiftRead);
+  };
+
+  const handleToggleSwiftRead = async () => {
+    const nextSwift = !isSwiftRead;
+    setIsSwiftRead(nextSwift);
+    try {
+      localStorage.setItem('voiceflow_swift_read', String(nextSwift));
+    } catch {}
+    if (viewMode === 'mini') {
+      await DesktopBridge.setMiniMode(true, nextSwift);
+    }
   };
 
   const handleTogglePin = async () => {
@@ -1060,6 +1078,8 @@ export function App() {
           isPinned={isPinned}
           onTogglePin={handleTogglePin}
           onExpand={() => handleToggleViewMode()}
+          isSwiftRead={isSwiftRead}
+          onToggleSwiftRead={handleToggleSwiftRead}
         />
       ) : (
         /* Full Application Layout (16:9 Desktop & Adaptive Mobile) */
@@ -1079,6 +1099,8 @@ export function App() {
               onOpenLogs={() => setIsLogModalOpen(true)}
               onOpenStorageSettings={() => setIsStorageModalOpen(true)}
               projectTitle={project.title}
+              isSwiftRead={isSwiftRead}
+              onToggleSwiftRead={handleToggleSwiftRead}
             />
           </div>
 
@@ -1184,6 +1206,8 @@ export function App() {
               activeCueIndex={activeCueIndex}
               totalCues={project.cues.length}
               onPopOutMini={handleToggleViewMode}
+              isSwiftRead={isSwiftRead}
+              onToggleSwiftRead={handleToggleSwiftRead}
             />
           </div>
 

@@ -707,13 +707,16 @@ class DesktopApi:
 
     # ------------------ WINDOW CONTROLS ------------------
 
-    def set_mini_mode(self, is_mini: bool) -> bool:
-        """Scales down window to floating mini-player bar (760x168) or expands to full (1440x810)"""
+    def set_mini_mode(self, is_mini: bool, is_swift: bool = False) -> bool:
+        """Scales down window to floating mini-player bar (760x168 or swift 460x130) or expands to full (1440x810)"""
         try:
             if not self._window:
                 return False
             if is_mini:
-                self._window.resize(760, 168)
+                if is_swift:
+                    self._window.resize(460, 130)
+                else:
+                    self._window.resize(760, 168)
                 self.set_pinned(True)
             else:
                 self._window.resize(1440, 810)
@@ -721,6 +724,17 @@ class DesktopApi:
             return True
         except Exception as e:
             print(f"Mini mode error: {e}")
+            return False
+
+    def resize_window(self, width: int, height: int) -> bool:
+        """Explicitly resizes native window to width x height"""
+        try:
+            if self._window:
+                self._window.resize(width, height)
+                return True
+            return False
+        except Exception as e:
+            print(f"Resize window error: {e}")
             return False
 
     def set_pinned(self, is_pinned: bool) -> bool:

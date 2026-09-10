@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { Play, Pause, RotateCcw, RotateCw, Square, Volume2, VolumeX, Minimize2, Sparkles, Mic } from 'lucide-react';
+import { Play, Pause, RotateCcw, RotateCw, Square, Volume2, VolumeX, Minimize2, Sparkles, Mic, Zap } from 'lucide-react';
 import { TimedCue } from '../types';
 
 interface BottomPlayerBarProps {
@@ -20,6 +20,8 @@ interface BottomPlayerBarProps {
   activeCueIndex: number;
   totalCues: number;
   onPopOutMini: () => void;
+  isSwiftRead?: boolean;
+  onToggleSwiftRead?: () => void;
 }
 
 export const BottomPlayerBar: React.FC<BottomPlayerBarProps> = ({
@@ -40,6 +42,8 @@ export const BottomPlayerBar: React.FC<BottomPlayerBarProps> = ({
   activeCueIndex,
   totalCues,
   onPopOutMini,
+  isSwiftRead = false,
+  onToggleSwiftRead,
 }) => {
   const progressBarRef = useRef<HTMLDivElement>(null);
 
@@ -172,6 +176,22 @@ export const BottomPlayerBar: React.FC<BottomPlayerBarProps> = ({
             className="w-16 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
           />
         </div>
+
+        {/* Swift Read RSVP Toggle Button */}
+        {onToggleSwiftRead && (
+          <button
+            onClick={onToggleSwiftRead}
+            className={`flex items-center space-x-1 px-2 py-1.5 rounded-lg border transition text-xs font-medium ${
+              isSwiftRead
+                ? 'bg-amber-950/80 border-amber-400 text-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.3)]'
+                : 'bg-slate-900 border-slate-700 hover:border-slate-600 text-slate-400 hover:text-white'
+            }`}
+            title="Swift Reading RSVP mode (Single-word speed reading in mini-mode)"
+          >
+            <Zap className={`w-3.5 h-3.5 ${isSwiftRead ? 'fill-amber-400 text-amber-400' : ''}`} />
+            <span className="hidden xl:inline">Swift</span>
+          </button>
+        )}
 
         {/* Pop Out Mini Player Button */}
         <button

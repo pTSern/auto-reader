@@ -18,7 +18,8 @@ declare global {
   interface Window {
     pywebview?: {
       api: {
-        set_mini_mode: (mini: boolean) => Promise<boolean>;
+        set_mini_mode: (mini: boolean, is_swift?: boolean) => Promise<boolean>;
+        resize_window?: (width: number, height: number) => Promise<boolean>;
         set_pinned: (pinned: boolean) => Promise<boolean>;
         drag_window: () => Promise<void>;
         minimize?: () => Promise<boolean>;
@@ -148,12 +149,23 @@ export const DesktopBridge = {
     });
   },
 
-  async setMiniMode(isMini: boolean): Promise<boolean> {
+  async setMiniMode(isMini: boolean, isSwift: boolean = false): Promise<boolean> {
     if (window.pywebview?.api?.set_mini_mode) {
       try {
-        return await window.pywebview.api.set_mini_mode(isMini);
+        return await window.pywebview.api.set_mini_mode(isMini, isSwift);
       } catch (e) {
         console.warn('Failed to call set_mini_mode', e);
+      }
+    }
+    return false;
+  },
+
+  async resizeWindow(width: number, height: number): Promise<boolean> {
+    if (window.pywebview?.api?.resize_window) {
+      try {
+        return await window.pywebview.api.resize_window(width, height);
+      } catch (e) {
+        console.warn('Failed to call resize_window', e);
       }
     }
     return false;
