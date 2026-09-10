@@ -1,0 +1,54 @@
+name: Build Windows App
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows Standalone Executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build Web Frontend
+        run: npm run build
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Package with PyInstaller
+        run: |
+          python -m PyInstaller VoiceFlowStudio.spec --distpath release --workpath build_pyinstaller --noconfirm --clean
+
+      - name: Compress Release into ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path 'release\VoiceFlow Studio\*' -DestinationPath 'release\VoiceFlow-Studio-Windows-x64.zip' -Force
+
+      - name: Upload Windows Distributable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceFlowStudio-Windows-x64
+          path: release/VoiceFlow-Studio-Windows-x64.zip
+          retention-days: 30
