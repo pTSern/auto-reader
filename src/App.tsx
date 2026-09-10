@@ -11,12 +11,13 @@ import { StorageSettingsModal } from './components/StorageSettingsModal';
 import { LogViewerModal } from './components/LogViewerModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobilePlayerSheet } from './components/MobilePlayerSheet';
-import { ProjectData, FileReference, VoiceModel, TimedCue, ViewMode, TextChunk, VoiceTrackStatus } from './types';
+import { ProjectData, FileReference, VoiceModel, TimedCue, ViewMode, TextChunk, VoiceTrackStatus, PlaybackMemory } from './types';
 import { getVoiceById, getVoiceFolderSubpath } from './services/voicesCatalog';
 import { exportToSrt } from './services/edgeTtsClient';
 import { calculateTextStats } from './services/pdfExtractor';
 import {
   saveProject,
+  persistPlaybackMemory,
   savePlaybackProgress,
   loadPlaybackProgress,
   getLastActiveProject,
@@ -112,6 +113,29 @@ export function App() {
   const isChunkStreamingRef = useRef<boolean>(false);
   const isBufferingNextChunkRef = useRef<boolean>(false);
 
+  // Real-time playback position & memory tracking refs
+  const projectIdRef = useRef<string>(project.id);
+  const currentTimeRef = useRef<number>(currentTime);
+  const durationRef = useRef<number>(duration);
+  const activeCueIndexRef = useRef<number>(activeCueIndex);
+  const lastSavedTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    projectIdRef.current = project.id;
+  }, [project.id]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  useEffect(() => {
+    activeCueIndexRef.current = activeCueIndex;
+  }, [activeCueIndex]);
+
   useEffect(() => {
     cuesRef.current = project.cues;
   }, [project.cues]);
@@ -177,6 +201,23 @@ export function App() {
       }
     };
 
+    audio.onpause = () => {
+      setIsPlaying(false);
+      const pId = projectIdRef.current;
+      if (!pId) return;
+      const cur = currentTimeRef.current;
+      const dur = durationRef.current;
+      const cueIdx = activeCueIndexRef.current;
+      persistPlaybackMemory(pId, {
+        currentTime: cur,
+        duration: dur,
+        activeCueIndex: cueIdx,
+        percentCompleted: dur > 0 ? (cur / dur) * 100 : 0,
+      });
+      lastSavedTimeRef.current = cur;
+      Logger.info(`Playback paused: progress saved at ${cur.toFixed(1)}s (line #${cueIdx + 1}).`);
+    };
+
     audio.ontimeupdate = () => {
       let cur = audio.currentTime;
       if (isChunkStreamingRef.current) {
@@ -194,11 +235,24 @@ export function App() {
 
       // Fast O(log N) active subtitle cue lookup using binary search
       const currentCues = cuesRef.current;
+      let activeIdx = activeCueIndexRef.current;
       if (currentCues && currentCues.length > 0) {
         const idx = findActiveCueIndex(currentCues, cur);
         if (idx !== -1) {
+          activeIdx = idx;
           setActiveCueIndex(idx);
         }
+      }
+
+      // Real-time periodic save while listening: after a few seconds (every ~3s)
+      if (Math.abs(cur - lastSavedTimeRef.current) >= 3 && projectIdRef.current) {
+        lastSavedTimeRef.current = cur;
+        persistPlaybackMemory(projectIdRef.current, {
+          currentTime: cur,
+          duration: durationRef.current,
+          activeCueIndex: activeIdx,
+          percentCompleted: durationRef.current > 0 ? (cur / durationRef.current) * 100 : 0,
+        });
       }
     };
 
@@ -228,7 +282,24 @@ export function App() {
       setIsPlaying(false);
     };
 
+    const handleBeforeUnload = () => {
+      const pId = projectIdRef.current;
+      if (pId) {
+        const cur = currentTimeRef.current;
+        const dur = durationRef.current;
+        const cueIdx = activeCueIndexRef.current;
+        persistPlaybackMemory(pId, {
+          currentTime: cur,
+          duration: dur,
+          activeCueIndex: cueIdx,
+          percentCompleted: dur > 0 ? (cur / dur) * 100 : 0,
+        });
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       audio.pause();
       audio.src = '';
       preloadAudio.pause();
@@ -364,6 +435,22 @@ export function App() {
     seekTo(target);
   };
 
+  const triggerSeekSave = (seconds: number, forcedCueIdx?: number) => {
+    const pId = projectIdRef.current;
+    if (!pId) return;
+    const dur = durationRef.current;
+    const cueIdx = forcedCueIdx !== undefined ? forcedCueIdx : findActiveCueIndex(cuesRef.current, seconds);
+    const targetIdx = cueIdx !== -1 ? cueIdx : activeCueIndexRef.current;
+    const memory: PlaybackMemory = {
+      currentTime: seconds,
+      duration: dur,
+      activeCueIndex: targetIdx,
+      percentCompleted: dur > 0 ? (seconds / dur) * 100 : 0,
+    };
+    persistPlaybackMemory(pId, memory);
+    lastSavedTimeRef.current = seconds;
+  };
+
   const seekTo = (seconds: number) => {
     if (!audioRef.current) return;
 
@@ -386,6 +473,7 @@ export function App() {
             audioRef.current.play().catch(() => {});
           }
           preloadNextChunk(targetIdx + 1);
+          triggerSeekSave(seconds);
           return;
         }
       }
@@ -394,6 +482,7 @@ export function App() {
     // Default seek when using combined audio file
     audioRef.current.currentTime = seconds;
     setCurrentTime(seconds);
+    triggerSeekSave(seconds);
   };
 
   const seekToCue = (cue: TimedCue) => {
@@ -402,10 +491,17 @@ export function App() {
       Logger.warn(`Cannot seek to unloaded subtitle line "${cue.text.slice(0, 30)}..."`);
       return;
     }
+    const idx = cuesRef.current.findIndex((c) => c.id === cue.id);
+    if (idx !== -1) {
+      setActiveCueIndex(idx);
+    }
     seekTo(cue.start);
     if (!isPlaying) {
       togglePlay();
     }
+    // Real-time save immediately when jumping to any subtitle line
+    triggerSeekSave(cue.start, idx !== -1 ? idx : undefined);
+    Logger.info(`Jumped to subtitle line #${(idx !== -1 ? idx : activeCueIndexRef.current) + 1}: progress saved at ${cue.start.toFixed(1)}s.`);
   };
 
   // Generate Audio via ChunkCoordinator with Fast Start & Shadow Pre-gen

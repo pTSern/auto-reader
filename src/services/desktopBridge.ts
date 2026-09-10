@@ -30,6 +30,7 @@ declare global {
         browse_storage_folder?: () => Promise<string | null>;
         open_storage_folder?: (subfolder?: string) => Promise<boolean>;
         save_project_to_disk?: (projectData: any) => Promise<boolean>;
+        update_project_playback_memory?: (projectId: string, memory: any) => Promise<boolean>;
         load_all_projects_from_disk?: () => Promise<any[]>;
         load_project_from_disk?: (projectId: string) => Promise<any | null>;
         save_chunk_audio?: (
@@ -212,6 +213,17 @@ export const DesktopBridge = {
         return await window.pywebview.api.save_project_to_disk(projectData);
       } catch (e) {
         console.warn('Failed to save project to disk', e);
+      }
+    }
+    return false;
+  },
+
+  async updatePlaybackMemory(projectId: string, memory: any): Promise<boolean> {
+    if (window.pywebview?.api?.update_project_playback_memory) {
+      try {
+        return await window.pywebview.api.update_project_playback_memory(projectId, memory);
+      } catch (e) {
+        console.warn('Failed to update playback memory on disk', e);
       }
     }
     return false;

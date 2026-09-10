@@ -124,13 +124,28 @@ def main():
 
     print(f"- Successfully reloaded '{loaded['title']}' with disk MP3 streaming URL restored!")
 
-    # 7. Verify List All Projects on Disk
+    # 7. Test Real-time Playback Memory Update
+    print("\n7. Testing Real-time Playback Memory Update:")
+    new_mem = {
+        "currentTime": 7.85,
+        "duration": 9.2,
+        "activeCueIndex": 1,
+        "percentCompleted": 85.3
+    }
+    mem_ok = api.update_project_playback_memory(test_id, new_mem)
+    assert mem_ok is True, "Failed to update project playback memory"
+    reloaded = api.load_project_from_disk(test_id)
+    assert reloaded["playbackMemory"]["currentTime"] == 7.85
+    assert reloaded["playbackMemory"]["activeCueIndex"] == 1
+    print(f"- Verified real-time playback memory persisted to disk: currentTime={reloaded['playbackMemory']['currentTime']}s, cueIndex={reloaded['playbackMemory']['activeCueIndex']}")
+
+    # 8. Verify List All Projects on Disk
     all_disk_projects = api.load_all_projects_from_disk()
-    print(f"- Total projects listed on disk: {len(all_disk_projects)}")
+    print(f"\n8. Total projects listed on disk: {len(all_disk_projects)}")
     assert any(p["id"] == test_id for p in all_disk_projects)
 
-    # 8. Clean up test project
-    print("\n8. Cleaning up test project...")
+    # 9. Clean up test project
+    print("\n9. Cleaning up test project...")
     api.delete_project_from_disk(test_id)
     assert not os.path.exists(os.path.join(storage_dir, "projects", test_id))
     print("- Cleaned up successfully.")

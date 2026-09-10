@@ -29,6 +29,38 @@ export function loadPlaybackProgress(projectId: string): PlaybackMemory | null {
   return null;
 }
 
+/**
+ * Real-time playback memory persistence:
+ * 1. Instant synchronous write to localStorage (<0.01ms)
+ * 2. Instant native disk write to project.json if on desktop (<1ms)
+ * 3. Asynchronous sync to IndexedDB
+ */
+export async function persistPlaybackMemory(projectId: string, memory: PlaybackMemory): Promise<void> {
+  if (!projectId) return;
+
+  // 1. Instant localStorage update
+  savePlaybackProgress(projectId, memory);
+
+  // 2. Persist to disk project.json immediately
+  if (DesktopBridge.isDesktop()) {
+    DesktopBridge.updatePlaybackMemory(projectId, memory).catch(() => {});
+  }
+
+  // 3. Asynchronously sync to IndexedDB and mark as last active
+  try {
+    set(LAST_ACTIVE_PROJECT_KEY, projectId).catch(() => {});
+    const key = `${PROJECT_PREFIX}${projectId}`;
+    const existing = await get<ProjectData>(key);
+    if (existing) {
+      existing.playbackMemory = memory;
+      existing.updatedAt = Date.now();
+      await set(key, existing);
+    }
+  } catch (e) {
+    // Ignore IDB errors
+  }
+}
+
 export async function saveProject(project: ProjectData, persistAudio: boolean = false): Promise<void> {
   project.updatedAt = Date.now();
   

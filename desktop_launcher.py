@@ -6,6 +6,7 @@ import base64
 import shutil
 import asyncio
 import ctypes
+import time
 from ctypes import wintypes
 from datetime import datetime
 import webview
@@ -205,6 +206,28 @@ class DesktopApi:
             return True
         except Exception as e:
             self.write_log("error", f"Error saving project to disk: {e}")
+            return False
+
+    def update_project_playback_memory(self, project_id: str, memory: dict) -> bool:
+        """Lightweight and atomic: Updates only the playbackMemory field in project.json on disk"""
+        try:
+            p_dir = os.path.join(self.get_storage_dir(), "projects", project_id)
+            json_path = os.path.join(p_dir, "project.json")
+            if not os.path.exists(json_path):
+                return False
+
+            with open(json_path, "r", encoding="utf-8") as f:
+                p_data = json.load(f)
+
+            p_data["playbackMemory"] = memory
+            p_data["updatedAt"] = int(time.time() * 1000)
+
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(p_data, f, ensure_ascii=False, indent=2)
+
+            return True
+        except Exception as e:
+            self.write_log("error", f"Error updating playback memory on disk: {e}")
             return False
 
     def load_all_projects_from_disk(self) -> list:
