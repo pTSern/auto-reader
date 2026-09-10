@@ -18,10 +18,25 @@ HWND_NOTOPMOST = -2
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE_PATH = os.path.join(BASE_DIR, "app.log")
-CONFIG_FILE_PATH = os.path.join(BASE_DIR, "config.json")
-DEFAULT_STORAGE_DIR = os.path.join(BASE_DIR, "projects_data")
+if getattr(sys, 'frozen', False):
+    BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
+    APP_DIR = BUNDLE_DIR
+
+LOG_FILE_PATH = os.path.join(APP_DIR, "app.log")
+CONFIG_FILE_PATH = os.path.join(APP_DIR, "config.json")
+DEFAULT_STORAGE_DIR = os.path.join(APP_DIR, "projects_data")
+
+def get_dist_dir():
+    bundle_dist = os.path.join(BUNDLE_DIR, "dist")
+    if os.path.exists(bundle_dist):
+        return bundle_dist
+    app_dist = os.path.join(APP_DIR, "dist")
+    if os.path.exists(app_dist):
+        return app_dist
+    return bundle_dist
 
 _MEDIA_SERVER_STARTED = False
 
@@ -809,7 +824,8 @@ def main():
     if len(sys.argv) > 1:
         target_url = sys.argv[1]
     else:
-        dist_index = os.path.join(BASE_DIR, "dist", "index.html")
+        dist_dir = get_dist_dir()
+        dist_index = os.path.join(dist_dir, "index.html")
         if os.path.exists(dist_index):
             target_url = f"http://127.0.0.1:{MEDIA_PORT}/"
         else:

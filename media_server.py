@@ -5,6 +5,7 @@ Supports HTTP 206 Partial Content (Range requests) for native scrubbing and inst
 """
 
 import os
+import sys
 import re
 import urllib.parse
 import mimetypes
@@ -13,6 +14,20 @@ from socketserver import ThreadingMixIn
 import threading
 
 MEDIA_PORT = 5174
+
+def get_dist_dir() -> str:
+    """Returns the production frontend dist/ directory, accounting for PyInstaller frozen execution"""
+    if getattr(sys, 'frozen', False):
+        # 1. Bundled inside PyInstaller archive (_MEIPASS)
+        mei_dist = os.path.join(getattr(sys, '_MEIPASS', ''), "dist")
+        if os.path.exists(mei_dist):
+            return mei_dist
+        # 2. Alongside executable in release package
+        exe_dist = os.path.join(os.path.dirname(sys.executable), "dist")
+        if os.path.exists(exe_dist):
+            return exe_dist
+    # 3. Development mode (relative to source file)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
@@ -50,7 +65,7 @@ class MediaServerHandler(BaseHTTPRequestHandler):
             return
 
         base_storage = self.storage_dir_provider() if callable(self.storage_dir_provider) else ""
-        dist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+        dist_dir = get_dist_dir()
 
         if clean_path.startswith("projects/") or clean_path.startswith("projects\\"):
             if not base_storage or not os.path.exists(base_storage):

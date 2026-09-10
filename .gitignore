@@ -3,6 +3,10 @@ node_modules/
 
 # Production builds
 dist/
+build/
+build_pyinstaller/
+release/
+*.spec.bak
 
 # Runtime logs & dynamic project storage
 app.log
