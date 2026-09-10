@@ -283,11 +283,23 @@ export class ChunkCoordinator {
             chunk.audioUrl = URL.createObjectURL(cachedBlob);
             chunk.status = 'ready';
 
-            // Generate approximate cues from text
-            const cues = generateEstimatedCues(chunk.text);
-            const lastCue = cues[cues.length - 1];
-            chunk.rawCues = cues;
-            chunk.duration = lastCue ? lastCue.end : Math.max(3, chunk.wordCount * 0.4);
+            // Load exact cues or scale estimated cues with exact MP3 duration
+            const cueData = await DesktopBridge.getChunkCues(this.projectId, index, this.voiceModel);
+            if (cueData?.cues && cueData.cues.length > 0) {
+              chunk.rawCues = cueData.cues;
+              chunk.duration = cueData.duration || cueData.cues[cueData.cues.length - 1].end;
+            } else {
+              const estCues = generateEstimatedCues(chunk.text);
+              const exactDur = cueData?.duration || Math.max(3, chunk.wordCount * 0.4);
+              const estEnd = estCues[estCues.length - 1]?.end || 1;
+              const scale = exactDur / estEnd;
+              chunk.rawCues = estCues.map((c) => ({
+                ...c,
+                start: parseFloat((c.start * scale).toFixed(2)),
+                end: parseFloat((c.end * scale).toFixed(2)),
+              }));
+              chunk.duration = exactDur;
+            }
 
             this.recalculateOffsets();
             this.onChunkReady?.(chunk, [...this.chunks]);
@@ -316,16 +328,23 @@ export class ChunkCoordinator {
       chunk.status = 'ready';
       chunk.rawCues = result.cues && result.cues.length > 0 ? result.cues : generateEstimatedCues(chunk.text);
 
-      // Save Chunk audio directly to disk file if running on desktop
-      if (this.projectId && DesktopBridge.isDesktop()) {
-        DesktopBridge.saveChunkAudio(this.projectId, index, result.audioBlob, this.voiceModel).catch((e) => {
-          Logger.warn(`Failed to persist chunk ${index} to disk:`, e);
-        });
-      }
-
       // Calculate total duration of this chunk from cues
       const lastCue = chunk.rawCues[chunk.rawCues.length - 1];
       chunk.duration = lastCue ? lastCue.end : 5;
+
+      // Save Chunk audio directly to disk file with synchronized timing cues if running on desktop
+      if (this.projectId && DesktopBridge.isDesktop()) {
+        DesktopBridge.saveChunkAudio(
+          this.projectId,
+          index,
+          result.audioBlob,
+          this.voiceModel,
+          chunk.rawCues,
+          chunk.duration
+        ).catch((e) => {
+          Logger.warn(`Failed to persist chunk ${index} to disk:`, e);
+        });
+      }
 
       this.recalculateOffsets();
       this.onChunkReady?.(chunk, [...this.chunks]);
@@ -412,11 +431,23 @@ export class ChunkCoordinator {
         if (audioUrl) {
           ch.audioUrl = audioUrl;
           ch.status = 'ready';
-          if (!ch.rawCues || ch.rawCues.length === 0) {
-            ch.rawCues = generateEstimatedCues(ch.text);
+          // Load exact cues or scale estimated cues with exact MP3 duration
+          const cueData = await DesktopBridge.getChunkCues(this.projectId, i, this.voiceModel);
+          if (cueData?.cues && cueData.cues.length > 0) {
+            ch.rawCues = cueData.cues;
+            ch.duration = cueData.duration || cueData.cues[cueData.cues.length - 1].end;
+          } else {
+            const estCues = generateEstimatedCues(ch.text);
+            const exactDur = cueData?.duration || Math.max(3, ch.wordCount * 0.4);
+            const estEnd = estCues[estCues.length - 1]?.end || 1;
+            const scale = exactDur / estEnd;
+            ch.rawCues = estCues.map((c) => ({
+              ...c,
+              start: parseFloat((c.start * scale).toFixed(2)),
+              end: parseFloat((c.end * scale).toFixed(2)),
+            }));
+            ch.duration = exactDur;
           }
-          const lastCue = ch.rawCues[ch.rawCues.length - 1];
-          ch.duration = lastCue ? lastCue.end : Math.max(3, ch.wordCount * 0.4);
           readyCount++;
         }
       }

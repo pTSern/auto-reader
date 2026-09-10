@@ -1,4 +1,4 @@
-import { VoiceModel, VoiceTrackStatus } from '../types';
+import { TimedCue, VoiceModel, VoiceTrackStatus } from '../types';
 
 export interface StorageInfo {
   storage_dir: string;
@@ -40,7 +40,9 @@ declare global {
           voiceId?: string,
           voiceLocale?: string,
           voiceGender?: string,
-          voiceName?: string
+          voiceName?: string,
+          cues?: any[],
+          duration?: number
         ) => Promise<boolean>;
         save_combined_audio?: (
           projectId: string,
@@ -74,6 +76,14 @@ declare global {
           voiceGender?: string,
           voiceName?: string
         ) => Promise<string | null>;
+        get_chunk_cues?: (
+          projectId: string,
+          chunkId: number,
+          voiceId?: string,
+          voiceLocale?: string,
+          voiceGender?: string,
+          voiceName?: string
+        ) => Promise<{ cues: any[] | null; duration: number } | null>;
         get_combined_audio_url?: (
           projectId: string,
           voiceId?: string,
@@ -282,17 +292,50 @@ export const DesktopBridge = {
     return null;
   },
 
-  async saveChunkAudio(projectId: string, chunkId: number, blob: Blob, voice?: VoiceModel | VoiceTrackParams): Promise<boolean> {
+  async saveChunkAudio(
+    projectId: string,
+    chunkId: number,
+    blob: Blob,
+    voice?: VoiceModel | VoiceTrackParams,
+    cues?: TimedCue[],
+    duration?: number
+  ): Promise<boolean> {
     if (window.pywebview?.api?.save_chunk_audio) {
       try {
         const base64 = await blobToBase64(blob);
         const [vId, vLoc, vGen, vName] = extractVoiceArgs(voice);
-        return await window.pywebview.api.save_chunk_audio(projectId, chunkId, base64, vId, vLoc, vGen, vName);
+        return await window.pywebview.api.save_chunk_audio(
+          projectId,
+          chunkId,
+          base64,
+          vId,
+          vLoc,
+          vGen,
+          vName,
+          cues,
+          duration
+        );
       } catch (e) {
         console.warn(`Failed to save chunk ${chunkId} audio to disk`, e);
       }
     }
     return false;
+  },
+
+  async getChunkCues(
+    projectId: string,
+    chunkId: number,
+    voice?: VoiceModel | VoiceTrackParams
+  ): Promise<{ cues: TimedCue[] | null; duration: number } | null> {
+    if (window.pywebview?.api?.get_chunk_cues) {
+      try {
+        const [vId, vLoc, vGen, vName] = extractVoiceArgs(voice);
+        return await window.pywebview.api.get_chunk_cues(projectId, chunkId, vId, vLoc, vGen, vName);
+      } catch (e) {
+        console.warn(`Failed to get chunk ${chunkId} cues from disk`, e);
+      }
+    }
+    return null;
   },
 
   async saveCombinedAudio(projectId: string, blob: Blob, voice?: VoiceModel | VoiceTrackParams): Promise<boolean> {

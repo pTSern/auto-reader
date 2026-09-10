@@ -343,14 +343,40 @@ class DesktopApi:
 
         return ""
 
+    def _read_mp3_duration(self, path: str) -> float:
+        """Accurately calculates MP3 audio duration from file size and MPEG frame bitrate header"""
+        if not os.path.exists(path):
+            return 0.0
+        try:
+            size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                data = f.read(4096)
+            import struct
+            idx = 0
+            while idx < len(data) - 4:
+                if data[idx] == 0xFF and (data[idx+1] & 0xE0) == 0xE0:
+                    header = struct.unpack(">I", data[idx:idx+4])[0]
+                    version = (header >> 19) & 3
+                    bitrate_idx = (header >> 12) & 0xF
+                    bitrates_v2_l3 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+                    bitrates_v1_l3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+                    kbps = bitrates_v2_l3[bitrate_idx] if version != 3 else bitrates_v1_l3[bitrate_idx]
+                    if kbps > 0:
+                        bps = (kbps * 1000) / 8
+                        return round(size / bps, 2)
+                idx += 1
+            return round(size / 6000.0, 2)
+        except Exception:
+            return 0.0
+
     def _get_voice_dir(self, project_id: str, voice_subpath: str = "") -> str:
         """Returns absolute path to project's voice directory"""
         if voice_subpath:
             return os.path.join(self.get_storage_dir(), "projects", project_id, voice_subpath)
         return os.path.join(self.get_storage_dir(), "projects", project_id)
 
-    def save_chunk_audio(self, project_id: str, chunk_id: int, base64_data: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> bool:
-        """Saves a chunk's MP3 audio to disk: <project_id>/<voice_subpath>/chunks/chunk_<id>.mp3"""
+    def save_chunk_audio(self, project_id: str, chunk_id: int, base64_data: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None, cues: list = None, duration: float = None) -> bool:
+        """Saves a chunk's MP3 audio and synchronized cues to disk: <project_id>/<voice_subpath>/chunks/chunk_<id>.mp3"""
         try:
             subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
             v_dir = self._get_voice_dir(project_id, subpath)
@@ -365,7 +391,13 @@ class DesktopApi:
             with open(mp3_path, "wb") as f:
                 f.write(binary_data)
 
-            self.write_log("info", f"Saved Chunk {chunk_id} ({subpath or 'default'}) audio to disk ({len(binary_data)} bytes) at {mp3_path}")
+            # Persist accurate Edge-TTS subtitle timing cues alongside audio
+            exact_dur = duration or self._read_mp3_duration(mp3_path)
+            cues_path = os.path.join(chunks_dir, f"chunk_{chunk_id}.cues.json")
+            with open(cues_path, "w", encoding="utf-8") as f:
+                json.dump({"cues": cues or [], "duration": exact_dur}, f, ensure_ascii=False)
+
+            self.write_log("info", f"Saved Chunk {chunk_id} ({subpath or 'default'}) audio ({len(binary_data)} bytes, {exact_dur}s) with cues at {mp3_path}")
             return True
         except Exception as e:
             self.write_log("error", f"Error saving chunk audio: {e}")
@@ -458,6 +490,32 @@ class DesktopApi:
         except Exception as e:
             print(f"Error reading chunk audio: {e}")
         return None
+
+    def get_chunk_cues(self, project_id: str, chunk_id: int, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> dict | None:
+        """Loads accurate cached subtitle cues and exact audio duration for a chunk"""
+        try:
+            full_path, _ = self._find_chunk_file_path(project_id, chunk_id, voice_id, voice_locale, voice_gender, voice_name)
+            if not full_path:
+                return None
+
+            cues_path = full_path.replace(".mp3", ".cues.json")
+            if os.path.exists(cues_path) and os.path.getsize(cues_path) > 0:
+                with open(cues_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return {
+                        "cues": data.get("cues"),
+                        "duration": data.get("duration", self._read_mp3_duration(full_path))
+                    }
+
+            # If no cues JSON, calculate exact audio duration from MP3 frame header
+            exact_dur = self._read_mp3_duration(full_path)
+            return {
+                "cues": None,
+                "duration": exact_dur
+            }
+        except Exception as e:
+            print(f"Error reading chunk cues: {e}")
+            return None
 
     def get_combined_audio_url(self, project_id: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str | None:
         """Returns HTTP streaming URL for a project's combined MP3"""

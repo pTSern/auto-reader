@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Edit3, Subtitles, Wand2, Copy, Check, Trash2, Play, Search, X } from 'lucide-react';
+import { Edit3, Subtitles, Wand2, Copy, Check, Trash2, Play, Search, X, FastForward } from 'lucide-react';
 import { TimedCue } from '../types';
 import { unwrapLines } from '../services/pdfExtractor';
 
@@ -11,6 +11,9 @@ interface WorkspacePanelProps {
   onSeekToCue: (cue: TimedCue) => void;
   isPlaying: boolean;
   isReadonly?: boolean;
+  totalChunks?: number;
+  currentChunkIndex?: number;
+  onJumpToChunk?: (chunkNumber: number) => void;
 }
 
 export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
@@ -21,9 +24,13 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   onSeekToCue,
   isPlaying,
   isReadonly = false,
+  totalChunks = 0,
+  currentChunkIndex = 0,
+  onJumpToChunk,
 }) => {
   const [tab, setTab] = useState<'subtitle' | 'edit'>('subtitle');
   const [searchQuery, setSearchQuery] = useState('');
+  const [targetChunkInput, setTargetChunkInput] = useState('');
   const [copied, setCopied] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(700);
@@ -33,6 +40,16 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop);
+  };
+
+  const handleJumpChunkSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!targetChunkInput.trim() || !onJumpToChunk) return;
+    const num = parseInt(targetChunkInput.trim(), 10);
+    if (!isNaN(num) && num >= 1) {
+      onJumpToChunk(num);
+      setTargetChunkInput('');
+    }
   };
 
   useEffect(() => {
@@ -189,6 +206,35 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
               </div>
             )}
           </div>
+        )}
+
+        {/* Fast-travel Jump to Chunk ID */}
+        {totalChunks > 1 && onJumpToChunk && (
+          <form
+            onSubmit={handleJumpChunkSubmit}
+            className="flex items-center space-x-1.5 bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-lg px-2 py-1 text-xs shrink-0 select-none transition"
+          >
+            <FastForward className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">Chunk</span>
+            <input
+              type="number"
+              min={1}
+              max={totalChunks}
+              value={targetChunkInput}
+              onChange={(e) => setTargetChunkInput(e.target.value)}
+              placeholder={String((currentChunkIndex || 0) + 1)}
+              className="w-12 bg-slate-950 border border-slate-700/80 focus:border-cyan-400 rounded px-1 py-0.5 text-center text-xs font-mono text-cyan-300 outline-none select-text"
+              title={`Enter chunk number to jump (1 to ${totalChunks})`}
+            />
+            <span className="text-[10px] text-slate-500 font-mono">/ {totalChunks}</span>
+            <button
+              type="submit"
+              className="px-2 py-0.5 rounded bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-[11px] font-medium transition active:scale-95"
+              title="Fast-travel to this chunk"
+            >
+              Go
+            </button>
+          </form>
         )}
 
         {/* Right Tools */}

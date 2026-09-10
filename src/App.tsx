@@ -619,6 +619,91 @@ export function App() {
     Logger.info(`Jumped to subtitle line #${(idx !== -1 ? idx : activeCueIndexRef.current) + 1}: progress saved at ${cue.start.toFixed(1)}s.`);
   };
 
+  // Fast Travel / Direct Jump to specific Chunk ID
+  const handleJumpToChunk = async (chunkNumber: number) => {
+    let chunks = chunksRef.current;
+    // Hydrate cached disk chunks if not yet loaded in state
+    if ((!chunks || chunks.length === 0) && project.textContent) {
+      const vModel = getVoiceById(project.voiceSettings.voiceId);
+      const coordinator = new ChunkCoordinator(
+        project.id,
+        project.textContent,
+        project.voiceSettings.voiceId,
+        project.voiceSettings.rate,
+        project.voiceSettings.pitch,
+        project.voiceSettings.volume,
+        project.shadowSettings || { enabled: true, chunkSizeWords: 500, concurrencyMode: 'auto' },
+        () => {},
+        undefined,
+        undefined,
+        vModel
+      );
+      const hydrated = await coordinator.hydrateCachedChunks();
+      if (hydrated.chunks.length > 0) {
+        chunks = hydrated.chunks;
+        chunksRef.current = hydrated.chunks;
+        cuesRef.current = hydrated.cues;
+        setProject((p) => ({ ...p, cues: hydrated.cues }));
+      }
+    }
+
+    if (!chunks || chunks.length === 0) return;
+
+    const targetIdx = Math.max(0, Math.min(chunks.length - 1, chunkNumber - 1));
+    const targetChunk = chunks[targetIdx];
+    if (!targetChunk) return;
+
+    // Fetch URL from desktop bridge if not yet bound
+    if (!targetChunk.audioUrl && DesktopBridge.isDesktop() && project.id) {
+      const vModel = getVoiceById(project.voiceSettings.voiceId);
+      const audioUrl = await DesktopBridge.getChunkAudioUrl(project.id, targetIdx, vModel);
+      if (audioUrl) {
+        targetChunk.audioUrl = audioUrl;
+        targetChunk.status = 'ready';
+      }
+    }
+
+    if (targetChunk.audioUrl && audioRef.current) {
+      isChunkStreamingRef.current = true;
+      currentChunkIndexRef.current = targetIdx;
+      audioRef.current.src = targetChunk.audioUrl;
+      audioRef.current.playbackRate = playbackSpeed;
+      audioRef.current.volume = volume / 100;
+      audioRef.current.currentTime = 0;
+      setCurrentTime(targetChunk.offsetSeconds);
+
+      if (isPlaying) {
+        audioRef.current.play().catch(() => {});
+      }
+      preloadNextChunk(targetIdx + 1);
+    } else if (project.audioUrl && audioRef.current) {
+      audioRef.current.currentTime = targetChunk.offsetSeconds;
+      setCurrentTime(targetChunk.offsetSeconds);
+      if (isPlaying) {
+        audioRef.current.play().catch(() => {});
+      }
+    } else {
+      setCurrentTime(targetChunk.offsetSeconds);
+    }
+
+    // Find the first subtitle cue belonging to this target chunk
+    const currentCues = cuesRef.current;
+    let cueIdx = currentCues.findIndex((c) => c.chunkId === targetIdx);
+    if (cueIdx === -1) {
+      cueIdx = currentCues.findIndex((c) => c.start >= targetChunk.offsetSeconds);
+    }
+    if (cueIdx !== -1) {
+      setActiveCueIndex(cueIdx);
+    }
+
+    triggerSeekSave(targetChunk.offsetSeconds, cueIdx !== -1 ? cueIdx : undefined);
+
+    const targetCueNum = cueIdx !== -1 ? cueIdx + 1 : 1;
+    setResumeNotification(`⚡ Fast travelled to Chunk ${targetIdx + 1}/${chunks.length} (Subtitle line #${targetCueNum}).`);
+    setTimeout(() => setResumeNotification(null), 4000);
+    Logger.info(`Fast travelled to Chunk #${targetIdx + 1} at ${targetChunk.offsetSeconds.toFixed(1)}s (line #${targetCueNum}).`);
+  };
+
   // Generate Audio via ChunkCoordinator with Fast Start & Shadow Pre-gen
   const handleGenerateAudio = async () => {
     if (!project.textContent || project.textContent.trim() === '') {
@@ -1034,6 +1119,9 @@ export function App() {
               onSeekToCue={seekToCue}
               isPlaying={isPlaying}
               isReadonly={isGenerating}
+              totalChunks={chunkProgress?.totalChunks || splitTextIntoChunks(project.textContent, project.shadowSettings?.chunkSizeWords || 500).length}
+              currentChunkIndex={currentChunkIndexRef.current}
+              onJumpToChunk={handleJumpToChunk}
             />
 
             {/* Right: Voice Settings & Synthesis Panel */}

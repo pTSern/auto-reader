@@ -27,18 +27,23 @@ def run_test():
     assert subpath2 == "vi-VN/female_hoaimy", f"Expected vi-VN/female_hoaimy, got {subpath2}"
     print(f"[PASS] Subpath resolution with Edge-TTS identifier: {subpath2}")
 
-    # 2. Test saving chunks under Jenny
+    # 2. Test saving chunks under Jenny with cues & duration
     fake_audio_b64 = "data:audio/mp3;base64," + base64.b64encode(b"FAKE_AUDIO_DATA_FOR_TEST").decode("ascii")
-    ok = api.save_chunk_audio(test_pid, 0, fake_audio_b64, voice_locale="en-US", voice_gender="Female", voice_name="Jenny")
+    sample_cues = [{"start": 0.0, "end": 2.5, "text": "Hello world"}]
+    ok = api.save_chunk_audio(test_pid, 0, fake_audio_b64, voice_locale="en-US", voice_gender="Female", voice_name="Jenny", cues=sample_cues, duration=2.5)
     assert ok, "Failed to save chunk 0 for Jenny"
     ok = api.save_chunk_audio(test_pid, 1, fake_audio_b64, voice_locale="en-US", voice_gender="Female", voice_name="Jenny")
     assert ok, "Failed to save chunk 1 for Jenny"
 
-    # Check cache
+    # Check cache and cues
     assert api.check_chunk_cache(test_pid, 0, voice_locale="en-US", voice_gender="Female", voice_name="Jenny")
     assert api.check_chunk_cache(test_pid, 1, voice_locale="en-US", voice_gender="Female", voice_name="Jenny")
     assert not api.check_chunk_cache(test_pid, 2, voice_locale="en-US", voice_gender="Female", voice_name="Jenny")
-    print("[PASS] Jenny chunks saved and cached correctly")
+
+    chunk_0_cues = api.get_chunk_cues(test_pid, 0, voice_locale="en-US", voice_gender="Female", voice_name="Jenny")
+    assert chunk_0_cues is not None and chunk_0_cues["duration"] == 2.5
+    assert len(chunk_0_cues["cues"]) == 1 and chunk_0_cues["cues"][0]["text"] == "Hello world"
+    print("[PASS] Jenny chunks and cues saved and cached correctly")
 
     # 3. Test saving chunk 0 and combined audio under Hoai My
     ok = api.save_chunk_audio(test_pid, 0, fake_audio_b64, voice_locale="vi-VN", voice_gender="Female", voice_name="HoaiMy")
