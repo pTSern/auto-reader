@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/cli": "^7.6.9",
+    "@capacitor/core": "^8.5.1",
     "clsx": "^2.1.1",
     "idb-keyval": "^6.2.1",
     "lucide-react": "^1.16.0",

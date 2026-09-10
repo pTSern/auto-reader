@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">VoiceFlow Studio</string>
+    <string name="title_activity_main">VoiceFlow Studio</string>
+    <string name="package_name">com.voiceflow.reader</string>
+    <string name="custom_url_scheme">com.voiceflow.reader</string>
+</resources>
