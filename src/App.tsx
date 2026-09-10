@@ -137,6 +137,7 @@ export function App() {
   const durationRef = useRef<number>(duration);
   const activeCueIndexRef = useRef<number>(activeCueIndex);
   const syncOffsetSecRef = useRef<number>(syncOffsetSec);
+  const playbackSpeedRef = useRef<number>(playbackSpeed);
   const lastSavedTimeRef = useRef<number>(0);
 
   useEffect(() => {
@@ -161,6 +162,10 @@ export function App() {
   useEffect(() => {
     syncOffsetSecRef.current = syncOffsetSec;
   }, [syncOffsetSec]);
+
+  useEffect(() => {
+    playbackSpeedRef.current = playbackSpeed;
+  }, [playbackSpeed]);
 
   useEffect(() => {
     cuesRef.current = project.cues;
@@ -224,11 +229,13 @@ export function App() {
         preloadNextChunk(currentChunkIndexRef.current + 1);
       }
 
-      // Fast O(log N) active subtitle cue lookup using binary search (with sync offset lead/lag)
+      // Fast O(log N) active subtitle cue lookup using binary search (with speed-adapted sync offset lead/lag)
       const currentCues = cuesRef.current;
       let activeIdx = activeCueIndexRef.current;
       if (currentCues && currentCues.length > 0) {
-        const effectiveCur = Math.max(0, cur + syncOffsetSecRef.current);
+        const speed = playbackSpeedRef.current || 1.0;
+        const effectiveOffset = syncOffsetSecRef.current * speed;
+        const effectiveCur = Math.max(0, cur + effectiveOffset);
         const idx = findActiveCueIndex(currentCues, effectiveCur);
         if (idx !== -1) {
           activeIdx = idx;
@@ -958,19 +965,53 @@ export function App() {
   };
 
   const handleSyncOffsetChange = (val: number) => {
-    const clamped = Math.max(-1.0, Math.min(1.0, parseFloat(val.toFixed(2))));
-    setSyncOffsetSec(clamped);
-    syncOffsetSecRef.current = clamped;
+    const cleanVal = isNaN(val) ? 0 : parseFloat(val.toFixed(2));
+    setSyncOffsetSec(cleanVal);
+    syncOffsetSecRef.current = cleanVal;
     try {
-      localStorage.setItem('voiceflow_sync_offset_sec', String(clamped));
+      localStorage.setItem('voiceflow_sync_offset_sec', String(cleanVal));
     } catch {}
+
+    // INSTANT DISPLAY UPDATE: Immediately re-evaluate active cue based on speed-adapted offset
+    const speed = playbackSpeedRef.current || 1.0;
+    const effectiveOffset = cleanVal * speed;
+    const currentCues = cuesRef.current;
+    if (currentCues && currentCues.length > 0) {
+      const effectiveCur = Math.max(0, currentTimeRef.current + effectiveOffset);
+      const idx = findActiveCueIndex(currentCues, effectiveCur);
+      if (idx !== -1) {
+        activeCueIndexRef.current = idx;
+        setActiveCueIndex(idx);
+      }
+    }
+
     setProject((p) => ({
       ...p,
       swiftSettings: {
         ...p.swiftSettings,
-        syncOffsetSec: clamped,
+        syncOffsetSec: cleanVal,
       },
     }));
+  };
+
+  const handlePlaybackSpeedChange = (speed: number) => {
+    setPlaybackSpeed(speed);
+    playbackSpeedRef.current = speed;
+    if (audioRef.current) {
+      audioRef.current.playbackRate = speed;
+    }
+
+    // INSTANT ADAPTIVE UPDATE: Immediately re-evaluate active cue for the new speed
+    const currentCues = cuesRef.current;
+    if (currentCues && currentCues.length > 0) {
+      const effectiveOffset = syncOffsetSecRef.current * speed;
+      const effectiveCur = Math.max(0, currentTimeRef.current + effectiveOffset);
+      const idx = findActiveCueIndex(currentCues, effectiveCur);
+      if (idx !== -1) {
+        activeCueIndexRef.current = idx;
+        setActiveCueIndex(idx);
+      }
+    }
   };
 
   const handleTogglePin = async () => {
@@ -1101,13 +1142,14 @@ export function App() {
           duration={duration}
           onSeek={seekTo}
           playbackSpeed={playbackSpeed}
-          onPlaybackSpeedChange={setPlaybackSpeed}
+          onPlaybackSpeedChange={handlePlaybackSpeedChange}
           volume={volume}
           onVolumeChange={setVolume}
           trackTitle={project.title}
           activeCue={activeCue}
           activeCueIndex={activeCueIndex}
           totalCues={project.cues.length}
+          cues={project.cues}
           isPinned={isPinned}
           onTogglePin={handleTogglePin}
           onExpand={() => handleToggleViewMode()}
@@ -1233,7 +1275,7 @@ export function App() {
               duration={duration}
               onSeek={seekTo}
               playbackSpeed={playbackSpeed}
-              onPlaybackSpeedChange={setPlaybackSpeed}
+              onPlaybackSpeedChange={handlePlaybackSpeedChange}
               volume={volume}
               onVolumeChange={setVolume}
               trackTitle={project.title}
@@ -1257,7 +1299,7 @@ export function App() {
               duration={duration}
               onSeek={seekTo}
               playbackSpeed={playbackSpeed}
-              onPlaybackSpeedChange={setPlaybackSpeed}
+              onPlaybackSpeedChange={handlePlaybackSpeedChange}
               trackTitle={project.title}
               activeCue={activeCue}
               onExportMp3={handleExportMp3}
@@ -1309,6 +1351,9 @@ export function App() {
           onSaveProjectSettings={async (updated) => {
             if (updated.id === project.id) {
               setProject(updated);
+              if (updated.swiftSettings?.syncOffsetSec !== undefined) {
+                handleSyncOffsetChange(updated.swiftSettings.syncOffsetSec);
+              }
             }
             await saveProject(updated, false);
             const all = await getAllProjects();

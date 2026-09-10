@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Play, Pause, RotateCcw, RotateCw, Pin, Maximize2, Move, Zap } from 'lucide-react';
 import { TimedCue } from '../types';
 import { DesktopBridge } from '../services/desktopBridge';
@@ -19,6 +19,7 @@ interface FloatingMiniPlayerProps {
   activeCue: TimedCue | null;
   activeCueIndex: number;
   totalCues: number;
+  cues?: TimedCue[];
   isPinned: boolean;
   onTogglePin: () => void;
   onExpand: () => void;
@@ -44,6 +45,7 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
   activeCue,
   activeCueIndex,
   totalCues,
+  cues = [],
   isPinned,
   onTogglePin,
   onExpand,
@@ -53,6 +55,8 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
   onSyncOffsetChange,
 }) => {
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const [isEditingOffset, setIsEditingOffset] = useState(false);
+  const [tempOffset, setTempOffset] = useState(String(syncOffsetSec));
 
   const formatSec = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -70,6 +74,28 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  // Speed-adapted lead/lag offset: scales with playback speed (e.g. 2x speed -> offset * 2)
+  const effectiveOffset = (syncOffsetSec || 0) * (playbackSpeed || 1.0);
+  const effectiveTime = Math.max(0, currentTime + effectiveOffset);
+
+  // Instantly resolve display cue based on speed-adapted offset
+  const displayCue = useMemo(() => {
+    if (!cues || cues.length === 0) return activeCue;
+    if (activeCue && effectiveTime >= activeCue.start && effectiveTime <= activeCue.end) {
+      return activeCue;
+    }
+    let low = 0;
+    let high = cues.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      const c = cues[mid];
+      if (effectiveTime >= c.start && effectiveTime <= c.end) return c;
+      if (effectiveTime < c.start) high = mid - 1;
+      else low = mid + 1;
+    }
+    return high >= 0 && high < cues.length ? cues[high] : activeCue;
+  }, [cues, activeCue, effectiveTime]);
+
   // SwiftRead RSVP (Optimal Recognition Point) calculation
   const getOrpIndex = (word: string): number => {
     const clean = word.replace(/^[^\w\s]+|[^\w\s]+$/g, '');
@@ -82,24 +108,31 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
   };
 
   const words = useMemo(() => {
-    if (!activeCue?.text) return [];
-    return activeCue.text.trim().split(/\s+/).filter(Boolean);
-  }, [activeCue?.text]);
+    if (!displayCue?.text) return [];
+    return displayCue.text.trim().split(/\s+/).filter(Boolean);
+  }, [displayCue?.text]);
 
   const currentWordIndex = useMemo(() => {
-    if (!activeCue || words.length === 0) return 0;
-    const effectiveTime = Math.max(0, currentTime + syncOffsetSec);
-    const cueDuration = Math.max(0.1, activeCue.end - activeCue.start);
-    const elapsed = Math.max(0, effectiveTime - activeCue.start);
+    if (!displayCue || words.length === 0) return 0;
+    const cueDuration = Math.max(0.1, displayCue.end - displayCue.start);
+    const elapsed = Math.max(0, effectiveTime - displayCue.start);
     const progress = Math.min(0.999, elapsed / cueDuration);
-    return Math.min(words.length - 1, Math.floor(progress * words.length));
-  }, [activeCue, currentTime, syncOffsetSec, words.length]);
+    return Math.min(words.length - 1, Math.max(0, Math.floor(progress * words.length)));
+  }, [displayCue, effectiveTime, words.length]);
 
-  const currentWord = words[currentWordIndex] || (activeCue ? activeCue.text : (trackTitle || 'VoiceFlow'));
+  const currentWord = words[currentWordIndex] || (displayCue ? displayCue.text : (trackTitle || 'VoiceFlow'));
   const orpIdx = getOrpIndex(currentWord);
   const prefix = currentWord.slice(0, orpIdx);
   const orpChar = currentWord.charAt(orpIdx);
   const suffix = currentWord.slice(orpIdx + 1);
+
+  const handleCommitOffset = () => {
+    setIsEditingOffset(false);
+    const num = parseFloat(tempOffset);
+    if (!isNaN(num) && onSyncOffsetChange) {
+      onSyncOffsetChange(parseFloat(num.toFixed(2)));
+    }
+  };
 
   return (
     <div
@@ -152,26 +185,49 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
             </button>
           )}
 
-          {/* Real-time Sync Offset Calibration Stepper (Faster/Slower) */}
+          {/* Real-time Sync Offset Calibration Stepper (No min/max limits, speed-adapted) */}
           {isSwiftRead && onSyncOffsetChange && (
             <div
               className="flex items-center space-x-0.5 bg-slate-900 border border-slate-700/80 rounded px-1 py-0.5 text-[10px] font-mono text-amber-300 shadow-sm"
-              title="Adjust Swift sync offset: positive = earlier/faster, negative = delayed/slower"
+              title={`Base offset: ${syncOffsetSec > 0 ? '+' : ''}${syncOffsetSec.toFixed(2)}s | Speed-adapted: ${effectiveOffset > 0 ? '+' : ''}${effectiveOffset.toFixed(2)}s (at ${playbackSpeed}x)`}
             >
               <button
                 onClick={() => onSyncOffsetChange(parseFloat((syncOffsetSec - 0.05).toFixed(2)))}
                 className="px-0.5 text-slate-400 hover:text-white transition active:scale-90 font-bold"
-                title="Delay text / slower (-0.05s)"
+                title="Delay text / slower (-0.05s, unconstrained)"
               >
                 -
               </button>
-              <span className="font-semibold px-0.5 min-w-[34px] text-center select-none">
-                {syncOffsetSec > 0 ? `+${syncOffsetSec.toFixed(2)}s` : `${syncOffsetSec.toFixed(2)}s`}
-              </span>
+              {isEditingOffset ? (
+                <input
+                  type="number"
+                  step="0.05"
+                  autoFocus
+                  value={tempOffset}
+                  onChange={(e) => setTempOffset(e.target.value)}
+                  onBlur={handleCommitOffset}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleCommitOffset();
+                    if (e.key === 'Escape') setIsEditingOffset(false);
+                  }}
+                  className="w-12 bg-slate-950 text-amber-300 text-center font-semibold rounded outline-none border border-amber-400/80 px-0.5 py-0"
+                />
+              ) : (
+                <span
+                  onClick={() => {
+                    setTempOffset(String(syncOffsetSec));
+                    setIsEditingOffset(true);
+                  }}
+                  className="font-semibold px-0.5 min-w-[34px] text-center select-none cursor-pointer hover:text-white hover:underline"
+                  title="Click to type exact offset (no min/max limits)"
+                >
+                  {syncOffsetSec > 0 ? `+${syncOffsetSec.toFixed(2)}s` : `${syncOffsetSec.toFixed(2)}s`}
+                </span>
+              )}
               <button
                 onClick={() => onSyncOffsetChange(parseFloat((syncOffsetSec + 0.05).toFixed(2)))}
                 className="px-0.5 text-slate-400 hover:text-white transition active:scale-90 font-bold"
-                title="Advance text / un-delay (+0.05s)"
+                title="Advance text / un-delay (+0.05s, unconstrained)"
               >
                 +
               </button>

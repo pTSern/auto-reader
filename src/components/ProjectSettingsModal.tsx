@@ -264,38 +264,40 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
                   Swift Reading & Subtitle Sync Offset
                 </h4>
               </div>
-              <span
-                className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${
-                  syncOffsetSec > 0
-                    ? 'bg-amber-950/80 border border-amber-400/60 text-amber-300'
-                    : syncOffsetSec < 0
-                    ? 'bg-blue-950/80 border border-blue-400/60 text-blue-300'
-                    : 'bg-slate-800 text-slate-400'
-                }`}
-              >
-                {syncOffsetSec > 0
-                  ? `+${syncOffsetSec.toFixed(2)}s (Faster / Lead)`
-                  : syncOffsetSec < 0
-                  ? `${syncOffsetSec.toFixed(2)}s (Delayed / Slower)`
-                  : '0.00s (Exact)'}
-              </span>
+
+              {/* Direct Unconstrained Number Input */}
+              <div className="flex items-center space-x-1.5">
+                <input
+                  type="number"
+                  step="0.05"
+                  value={syncOffsetSec}
+                  onChange={(e) => {
+                    const parsed = parseFloat(e.target.value);
+                    setSyncOffsetSec(isNaN(parsed) ? 0 : parsed);
+                  }}
+                  className="w-20 px-2 py-0.5 rounded bg-slate-900 border border-amber-400/80 text-amber-300 font-mono text-center text-xs font-bold focus:ring-1 focus:ring-amber-400 outline-none"
+                  placeholder="0.25"
+                  title="Type any positive (earlier) or negative (delayed) offset in seconds"
+                />
+                <span className="text-[11px] text-slate-400 font-mono">sec</span>
+              </div>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              Compensates for speaker audio latency. Positive values display text faster/earlier before audio plays. Negative values delay text.
+              Compensates for speaker audio latency. Positive values display text earlier/faster before audio plays; negative values delay text. Automatically scales with speech playback speed (e.g. 1.5x, 2x). No minimum or maximum limits.
             </p>
 
             <div className="space-y-1.5 pt-1">
               <input
                 type="range"
-                min={-0.60}
-                max={0.60}
+                min={-2.0}
+                max={2.0}
                 step={0.05}
-                value={syncOffsetSec}
+                value={Math.max(-2.0, Math.min(2.0, syncOffsetSec))}
                 onChange={(e) => setSyncOffsetSec(parseFloat(e.target.value))}
                 className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
               />
               <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                <span>-0.60s (Slower)</span>
+                <span>-2.0s (Slower)</span>
                 <div className="flex space-x-3">
                   <button
                     type="button"
@@ -318,8 +320,15 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
                   >
                     +0.25s (Recommended)
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setSyncOffsetSec(0.50)}
+                    className="hover:text-slate-300 underline"
+                  >
+                    +0.50s
+                  </button>
                 </div>
-                <span>+0.60s (Faster)</span>
+                <span>+2.0s (Faster)</span>
               </div>
             </div>
           </div>
