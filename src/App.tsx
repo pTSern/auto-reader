@@ -29,7 +29,7 @@ import { ChunkCoordinator, splitTextIntoChunks } from './services/chunkingEngine
 import { Logger } from './services/logger';
 
 /**
- * Fast O(log N) binary search for active karaoke cue.
+ * Fast O(log N) binary search for active subtitle cue.
  * Replaces linear O(N) scan that caused lag on documents with thousands of sentences.
  */
 function findActiveCueIndex(cues: TimedCue[], currentTime: number): number {
@@ -192,7 +192,7 @@ export function App() {
         preloadNextChunk(currentChunkIndexRef.current + 1);
       }
 
-      // Fast O(log N) active karaoke cue lookup using binary search
+      // Fast O(log N) active subtitle cue lookup using binary search
       const currentCues = cuesRef.current;
       if (currentCues && currentCues.length > 0) {
         const idx = findActiveCueIndex(currentCues, cur);
@@ -397,6 +397,11 @@ export function App() {
   };
 
   const seekToCue = (cue: TimedCue) => {
+    // Only allow selecting subtitle lines that are completed/ready
+    if (cue.isReady === false || (isGenerating && cue.isReady !== true)) {
+      Logger.warn(`Cannot seek to unloaded subtitle line "${cue.text.slice(0, 30)}..."`);
+      return;
+    }
     seekTo(cue.start);
     if (!isPlaying) {
       togglePlay();
@@ -439,7 +444,7 @@ export function App() {
         const estDuration = stats.totalSeconds || firstChunk.duration;
         setDuration(estDuration);
 
-        // Pre-populate cues for the whole text so user has full karaoke timeline immediately
+        // Pre-populate cues for the whole text so user has full subtitle timeline immediately
         const initialCues = coordinator.getAllCues();
         cuesRef.current = initialCues;
 
@@ -807,7 +812,7 @@ export function App() {
               />
             </div>
 
-            {/* Center: Text Editor & Karaoke Workspace */}
+            {/* Center: Text Editor & Subtitle Workspace */}
             <WorkspacePanel
               textContent={project.textContent}
               onTextChange={(val) => setProject((p) => ({ ...p, textContent: val }))}

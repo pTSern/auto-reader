@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Edit3, Mic, Wand2, Copy, Check, Trash2, Play } from 'lucide-react';
+import { Edit3, Subtitles, Wand2, Copy, Check, Trash2, Play } from 'lucide-react';
 import { TimedCue } from '../types';
 import { unwrapLines } from '../services/pdfExtractor';
 
@@ -22,7 +22,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   isPlaying,
   isReadonly = false,
 }) => {
-  const [tab, setTab] = useState<'karaoke' | 'edit'>('karaoke');
+  const [tab, setTab] = useState<'subtitle' | 'edit'>('subtitle');
   const [copied, setCopied] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(700);
@@ -39,9 +39,9 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
     }
   }, []);
 
-  // Auto-scroll to active sentence in karaoke mode
+  // Auto-scroll to active sentence in subtitle mode
   useEffect(() => {
-    if (tab === 'karaoke' && activeSentenceRef.current) {
+    if (tab === 'subtitle' && activeSentenceRef.current) {
       activeSentenceRef.current.scrollIntoView({
         behavior: 'smooth',
         block: 'center',
@@ -103,15 +103,15 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
         {/* Left Tabs */}
         <div className="flex items-center space-x-1.5 p-1 bg-slate-900 rounded-lg border border-slate-800">
           <button
-            onClick={() => setTab('karaoke')}
+            onClick={() => setTab('subtitle')}
             className={`flex items-center space-x-1.5 px-3 py-1 rounded-md text-xs font-medium transition ${
-              tab === 'karaoke'
+              tab === 'subtitle'
                 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(56,189,248,0.2)]'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Mic className="w-3.5 h-3.5" />
-            <span>🎤 Karaoke View</span>
+            <Subtitles className="w-3.5 h-3.5" />
+            <span>💬 Subtitle View</span>
           </button>
 
           <button
@@ -195,11 +195,11 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
             }`}
           />
         ) : (
-          /* Karaoke Synchronized View */
+          /* Subtitle Synchronized View */
           <div className="max-w-3xl mx-auto space-y-3 w-full">
             {cues.length === 0 ? (
               <div className="text-center py-20 text-slate-500 text-sm space-y-3">
-                <Mic className="w-10 h-10 mx-auto text-slate-600 opacity-60" />
+                <Subtitles className="w-10 h-10 mx-auto text-slate-600 opacity-60" />
                 <p>No audio generated yet.</p>
                 <p className="text-xs text-slate-600">
                   Click <strong className="text-cyan-400">"Generate Audio"</strong> on the right to synthesize speech with real-time sentence timestamps.
@@ -212,23 +212,29 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                   const idx = startIndex + offsetIdx;
                   const isActive = idx === activeCueIndex;
                   const isPast = idx < activeCueIndex;
+                  // Only allow selecting subtitle line that is done generated
+                  const isLineReady = cue.isReady !== false && (!isReadonly || cue.isReady === true);
 
                   return (
                     <div
                       key={cue.id}
                       ref={isActive ? activeSentenceRef : null}
-                      onClick={() => onSeekToCue(cue)}
-                      className={`p-3.5 rounded-xl transition-all duration-300 cursor-pointer text-sm leading-relaxed border select-text ${
-                        isActive
-                          ? 'bg-cyan-950/50 border-cyan-400 text-white shadow-[0_0_20px_rgba(56,189,248,0.25)] scale-[1.01]'
+                      onClick={isLineReady ? () => onSeekToCue(cue) : undefined}
+                      className={`group p-3.5 rounded-xl transition-all duration-300 text-sm leading-relaxed border select-text ${
+                        !isLineReady
+                          ? 'bg-slate-950/20 border-dashed border-slate-800/60 opacity-40 grayscale cursor-not-allowed select-none'
+                          : isActive
+                          ? 'bg-cyan-950/50 border-cyan-400 text-white shadow-[0_0_20px_rgba(56,189,248,0.25)] scale-[1.01] cursor-pointer'
                           : isPast
-                          ? 'bg-slate-950/20 border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800/40'
-                          : 'bg-slate-950/30 border-transparent text-slate-300 hover:bg-slate-800/40 hover:text-white'
+                          ? 'bg-slate-950/20 border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800/40 cursor-pointer'
+                          : 'bg-slate-950/30 border-transparent text-slate-300 hover:bg-slate-800/40 hover:text-white cursor-pointer'
                       }`}
                     >
                       {/* Timestamp & Active Indicator Badge */}
                       <div className="flex items-center justify-between text-[11px] mb-1.5 select-none font-mono">
-                        <span className={`inline-flex items-center space-x-1.5 ${isActive ? 'text-cyan-400 font-semibold' : 'text-slate-500'}`}>
+                        <span className={`inline-flex items-center space-x-1.5 ${
+                          !isLineReady ? 'text-slate-600' : isActive ? 'text-cyan-400 font-semibold' : 'text-slate-500'
+                        }`}>
                           {isActive && <Play className="w-3 h-3 fill-cyan-400 animate-pulse" />}
                           <span>{formatTime(cue.start)}</span>
                           {isActive && (
@@ -237,12 +243,20 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                             </span>
                           )}
                         </span>
-                        <span className="text-[10px] text-slate-600 hover:text-slate-400">
-                          Jump here
-                        </span>
+
+                        {!isLineReady ? (
+                          <span className="text-[10px] text-slate-500 flex items-center space-x-1.5 font-sans bg-slate-900/80 px-2 py-0.5 rounded border border-slate-800">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-600 animate-pulse" />
+                            <span>Not loaded yet</span>
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-500 group-hover:text-cyan-400 transition-colors">
+                            Jump here
+                          </span>
+                        )}
                       </div>
 
-                      <p className={isActive ? 'font-medium text-slate-50' : ''}>
+                      <p className={!isLineReady ? 'text-slate-500 italic' : isActive ? 'font-medium text-slate-50' : ''}>
                         {cue.text}
                       </p>
                     </div>

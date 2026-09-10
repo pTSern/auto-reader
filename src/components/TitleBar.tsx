@@ -55,7 +55,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse-subtle" />
         <span>Edge-TTS Online</span>
         <span className="text-slate-600">|</span>
-        <span className="text-slate-400">Karaoke Sync Ready</span>
+        <span className="text-slate-400">Subtitle Sync Ready</span>
       </div>
 
       {/* Right: Window Controls, Pin, Mini-Player, Logs, Storage */}
@@ -98,7 +98,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <button
           onClick={onToggleViewMode}
           className="flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-slate-900 border border-slate-800 hover:border-cyan-500/50 text-slate-300 hover:text-white transition text-xs font-medium"
-          title="Minimize to Floating Karaoke Player Bar"
+          title="Minimize to Floating Subtitle Player Bar"
         >
           <Minimize2 className="w-3.5 h-3.5 text-cyan-400" />
           <span className="hidden sm:inline">Mini Player</span>

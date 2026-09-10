@@ -319,11 +319,15 @@ export class ChunkCoordinator {
       }
 
       // Map cues with current running offset
+      const isChunkReady = ch.status === 'ready';
       ch.cues = ch.rawCues.map((c, cIdx) => ({
         id: (ch.id * 1000) + cIdx,
         start: parseFloat((c.start + runningOffset).toFixed(2)),
         end: parseFloat((c.end + runningOffset).toFixed(2)),
         text: c.text,
+        chunkId: ch.id,
+        isReady: isChunkReady,
+        status: ch.status,
       }));
 
       // Determine chunk duration: real duration if ready, else end timestamp of last estimated cue
@@ -376,7 +380,13 @@ export class ChunkCoordinator {
 
     const combinedCues: TimedCue[] = [];
     readyChunks.forEach((c) => {
-      combinedCues.push(...c.cues);
+      const readyCues = c.cues.map((cue) => ({
+        ...cue,
+        chunkId: c.id,
+        isReady: true,
+        status: 'ready' as const,
+      }));
+      combinedCues.push(...readyCues);
     });
 
     // Save combined.mp3 to disk file

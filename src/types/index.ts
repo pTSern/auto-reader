@@ -3,6 +3,9 @@ export interface TimedCue {
   start: number; // in seconds
   end: number;   // in seconds
   text: string;
+  chunkId?: number;
+  isReady?: boolean; // true if this line has audio generated & ready to play
+  status?: 'ready' | 'generating' | 'pending' | 'error';
 }
 
 export interface VoiceModel {

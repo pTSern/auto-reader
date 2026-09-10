@@ -575,12 +575,12 @@ class DesktopApi:
     # ------------------ WINDOW CONTROLS ------------------
 
     def set_mini_mode(self, is_mini: bool) -> bool:
-        """Scales down window to floating mini-player bar (720x150) or expands to full (1440x810)"""
+        """Scales down window to floating mini-player bar (760x168) or expands to full (1440x810)"""
         try:
             if not self._window:
                 return False
             if is_mini:
-                self._window.resize(720, 150)
+                self._window.resize(760, 168)
                 self.set_pinned(True)
             else:
                 self._window.resize(1440, 810)
@@ -593,7 +593,9 @@ class DesktopApi:
     def set_pinned(self, is_pinned: bool) -> bool:
         """Sets Win32 Always On Top priority"""
         try:
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            hwnd = ctypes.windll.user32.FindWindowW(None, "VoiceFlow Studio")
+            if not hwnd:
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
             flag = HWND_TOPMOST if is_pinned else HWND_NOTOPMOST
             ctypes.windll.user32.SetWindowPos(hwnd, flag, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
             self.write_log("info", f"Window pin state toggled: {is_pinned}")
@@ -639,8 +641,22 @@ class DesktopApi:
             return False
 
     def drag_window(self):
-        """Allows dragging the native window"""
-        pass
+        """Allows dragging the native window anywhere on the desktop screen"""
+        try:
+            WM_NCLBUTTONDOWN = 0xA1
+            HTCAPTION = 0x2
+            GA_ROOT = 2
+            hwnd = ctypes.windll.user32.FindWindowW(None, "VoiceFlow Studio")
+            if not hwnd:
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if hwnd:
+                root_hwnd = ctypes.windll.user32.GetAncestor(hwnd, GA_ROOT)
+                if root_hwnd:
+                    hwnd = root_hwnd
+                ctypes.windll.user32.ReleaseCapture()
+                ctypes.windll.user32.SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0)
+        except Exception as e:
+            print(f"Drag window error: {e}")
 
 def main():
     if len(sys.argv) > 1:

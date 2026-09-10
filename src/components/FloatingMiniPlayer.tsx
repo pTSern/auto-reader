@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Play, Pause, RotateCcw, RotateCw, Pin, Maximize2, X, Move, Volume2, VolumeX } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Play, Pause, RotateCcw, RotateCw, Pin, Maximize2, Move } from 'lucide-react';
 import { TimedCue } from '../types';
+import { DesktopBridge } from '../services/desktopBridge';
 
 interface FloatingMiniPlayerProps {
   isPlaying: boolean;
@@ -43,46 +44,7 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
   onTogglePin,
   onExpand,
 }) => {
-  const [position, setPosition] = useState({ x: 40, y: 40 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ mouseX: 0, mouseY: 0, startX: 0, startY: 0 });
   const progressBarRef = useRef<HTMLDivElement>(null);
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    // Only drag when clicking the drag handle area
-    setIsDragging(true);
-    dragStartRef.current = {
-      mouseX: e.clientX,
-      mouseY: e.clientY,
-      startX: position.x,
-      startY: position.y,
-    };
-  };
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
-      const dx = e.clientX - dragStartRef.current.mouseX;
-      const dy = e.clientY - dragStartRef.current.mouseY;
-      setPosition({
-        x: Math.max(10, Math.min(window.innerWidth - 730, dragStartRef.current.startX + dx)),
-        y: Math.max(10, Math.min(window.innerHeight - 160, dragStartRef.current.startY + dy)),
-      });
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging]);
 
   const formatSec = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -91,6 +53,7 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
   };
 
   const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
     if (!progressBarRef.current || duration === 0) return;
     const rect = progressBarRef.current.getBoundingClientRect();
     const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -101,29 +64,33 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
 
   return (
     <div
-      style={{ left: `${position.x}px`, top: `${position.y}px` }}
-      className={`fixed z-50 w-[720px] rounded-2xl bg-slate-950/95 border-2 shadow-2xl backdrop-blur-md select-none transition-shadow ${
+      className={`w-full h-full flex flex-col justify-between bg-slate-950/95 border-2 shadow-2xl backdrop-blur-md select-none overflow-hidden p-2.5 transition-colors ${
         isPinned
           ? 'border-cyan-400 shadow-[0_0_25px_rgba(56,189,248,0.35)]'
           : 'border-slate-700/80 shadow-black/80'
       }`}
     >
-      {/* Top Drag Header Bar */}
+      {/* Top Native Drag Header Bar */}
       <div
-        onMouseDown={handleMouseDown}
-        className="h-8 px-3.5 bg-slate-900/80 rounded-t-2xl border-b border-slate-800/80 flex items-center justify-between cursor-move text-xs text-slate-300"
+        onMouseDown={() => DesktopBridge.startWindowDrag()}
+        className="h-7 px-2.5 bg-slate-900/90 rounded-lg border border-slate-800/90 flex items-center justify-between cursor-move text-xs text-slate-300 pywebview-drag-region select-none shrink-0"
+        style={{ WebkitAppRegion: 'drag' } as any}
       >
-        <div className="flex items-center space-x-2 truncate">
+        <div className="flex items-center space-x-2 truncate pointer-events-none">
           <Move className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-          <span className="font-semibold text-white text-[11px] truncate">
+          <span className="font-semibold text-white text-[11px] truncate max-w-[340px]">
             {trackTitle || 'VoiceFlow Mini Player'}
           </span>
           <span className="text-slate-600 text-[10px]">•</span>
           <span className="text-[10px] text-slate-400 truncate">Drag anywhere</span>
         </div>
 
-        {/* Header Action Buttons */}
-        <div className="flex items-center space-x-1.5 shrink-0" onMouseDown={(e) => e.stopPropagation()}>
+        {/* Header Action Buttons (No-drag to ensure clickability) */}
+        <div
+          className="flex items-center space-x-1.5 shrink-0 no-drag"
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           {/* Pin Toggle */}
           <button
             onClick={onTogglePin}
@@ -149,10 +116,10 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
         </div>
       </div>
 
-      {/* Subtitle Karaoke Line Box */}
-      <div className="px-4 pt-3 pb-2">
-        <div className="p-2.5 rounded-xl bg-cyan-950/40 border border-cyan-500/30 min-h-[46px] flex items-center">
-          <p className="text-xs text-slate-100 font-medium leading-relaxed truncate-2-lines">
+      {/* Subtitle Line Box */}
+      <div className="px-0.5 py-1.5 flex-1 flex items-center overflow-hidden">
+        <div className="w-full p-2 rounded-xl bg-cyan-950/40 border border-cyan-500/30 min-h-[46px] flex items-center overflow-hidden">
+          <p className="text-xs text-slate-100 font-medium leading-relaxed line-clamp-2">
             <span className="font-mono text-cyan-400 font-bold mr-1.5 inline-flex items-center">
               ▶ {formatSec(currentTime)} •
             </span>
@@ -166,7 +133,11 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
       </div>
 
       {/* Bottom Transport Controls Bar */}
-      <div className="px-4 pb-3 pt-1 flex items-center justify-between space-x-4">
+      <div
+        className="px-1 h-8 flex items-center justify-between space-x-3 shrink-0 no-drag"
+        style={{ WebkitAppRegion: 'no-drag' } as any}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         {/* Timeline Scrubber */}
         <div className="flex-1 flex items-center space-x-2 text-[11px] font-mono text-slate-400">
           <span className="w-10 text-right">{formatSec(currentTime)}</span>
@@ -195,13 +166,13 @@ export const FloatingMiniPlayer: React.FC<FloatingMiniPlayerProps> = ({
 
           <button
             onClick={onTogglePlay}
-            className="w-8 h-8 rounded-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center shadow transition"
+            className="w-7 h-7 rounded-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center shadow transition"
             title="Play / Pause"
           >
             {isPlaying ? (
-              <Pause className="w-4 h-4 fill-slate-950" />
+              <Pause className="w-3.5 h-3.5 fill-slate-950" />
             ) : (
-              <Play className="w-4 h-4 fill-slate-950 ml-0.5" />
+              <Play className="w-3.5 h-3.5 fill-slate-950 ml-0.5" />
             )}
           </button>
 

@@ -52,7 +52,7 @@ export const MobilePlayerSheet: React.FC<MobilePlayerSheetProps> = ({
 
   return (
     <div className="bg-slate-950 border-t border-slate-800/90 px-4 pt-2.5 pb-4 select-none shadow-2xl">
-      {/* Track info & mini karaoke snippet */}
+      {/* Track info & mini subtitle snippet */}
       <div className="flex items-center justify-between text-[11px] mb-1.5">
         <span className="text-white font-medium truncate max-w-[200px]">
           🎵 {trackTitle || 'VoiceFlow Audio'}
