@@ -91,6 +91,9 @@ export async function saveProject(project: ProjectData, persistAudio: boolean = 
 export async function loadProject(id: string): Promise<ProjectData | null> {
   let data: ProjectData | null = null;
 
+  // Wait for native desktop bridge so disk projects load reliably
+  await DesktopBridge.ensureReady(1500);
+
   // Try loading from native disk first if on desktop
   if (DesktopBridge.isDesktop()) {
     try {
@@ -176,6 +179,9 @@ export async function getLastActiveProject(): Promise<ProjectData | null> {
 
 export async function getAllProjects(): Promise<ProjectData[]> {
   const projectMap = new Map<string, ProjectData>();
+
+  // Wait for native desktop bridge so disk projects load reliably
+  await DesktopBridge.ensureReady(1500);
 
   // 1. Fetch from native disk if desktop
   if (DesktopBridge.isDesktop()) {

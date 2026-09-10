@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pin, Minimize2, FolderKanban, Volume2, Terminal, Minus, Square, X, HardDrive } from 'lucide-react';
+import { Pin, Minimize2, FolderKanban, Volume2, Terminal, Minus, Square, X, HardDrive, Settings } from 'lucide-react';
 import { ViewMode } from '../types';
 import { DesktopBridge } from '../services/desktopBridge';
 
@@ -9,6 +9,7 @@ interface TitleBarProps {
   isPinned: boolean;
   onTogglePin: () => void;
   onOpenProjects: () => void;
+  onOpenProjectSettings?: () => void;
   onOpenLogs: () => void;
   onOpenStorageSettings: () => void;
   projectTitle: string;
@@ -20,6 +21,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   isPinned,
   onTogglePin,
   onOpenProjects,
+  onOpenProjectSettings,
   onOpenLogs,
   onOpenStorageSettings,
   projectTitle,
@@ -48,6 +50,16 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <FolderKanban className="w-3.5 h-3.5 text-cyan-400" />
           <span className="max-w-[180px] truncate">{projectTitle || 'Projects'}</span>
         </button>
+
+        {onOpenProjectSettings && (
+          <button
+            onClick={onOpenProjectSettings}
+            className="p-1 rounded-md bg-slate-900 border border-slate-700/70 hover:border-cyan-500/50 text-slate-400 hover:text-white transition"
+            title="Project Settings (Title, Speech Tuning, Chunking)"
+          >
+            <Settings className="w-3.5 h-3.5 text-cyan-400/80 hover:text-cyan-300" />
+          </button>
+        )}
       </div>
 
       {/* Center: Engine Status */}

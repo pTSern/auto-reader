@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, FolderKanban, Plus, Play, Trash2, Clock, FileText, AlertTriangle, Check, Save, HardDrive, FolderOpen } from 'lucide-react';
+import { X, FolderKanban, Plus, Play, Trash2, Clock, FileText, AlertTriangle, Check, Save, HardDrive, FolderOpen, Settings } from 'lucide-react';
 import { ProjectData } from '../types';
 import { DesktopBridge } from '../services/desktopBridge';
 
@@ -14,8 +14,8 @@ interface ProjectManagerModalProps {
   onDeleteProject: (id: string) => void;
   onResumePlayback: () => void;
   onOpenStorageSettings: () => void;
+  onEditProjectSettings?: (project: ProjectData) => void;
 }
-
 
 export const ProjectManagerModal: React.FC<ProjectManagerModalProps> = ({
   isOpen,
@@ -28,6 +28,7 @@ export const ProjectManagerModal: React.FC<ProjectManagerModalProps> = ({
   onDeleteProject,
   onResumePlayback,
   onOpenStorageSettings,
+  onEditProjectSettings,
 }) => {
   const [saveAsName, setSaveAsName] = useState('');
   const [isSavingAs, setIsSavingAs] = useState(false);
@@ -229,6 +230,19 @@ export const ProjectManagerModal: React.FC<ProjectManagerModalProps> = ({
                 </div>
 
                 <div className="flex items-center space-x-2 shrink-0">
+                  {onEditProjectSettings && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEditProjectSettings(project);
+                      }}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition"
+                      title="Project Settings"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+
                   {DesktopBridge.isDesktop() && (
                     <button
                       onClick={(e) => {

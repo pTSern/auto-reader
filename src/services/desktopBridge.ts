@@ -107,6 +107,37 @@ export const DesktopBridge = {
     return typeof window !== 'undefined' && !!window.pywebview;
   },
 
+  async ensureReady(timeoutMs: number = 2500): Promise<boolean> {
+    if (typeof window === 'undefined') return false;
+    if (window.pywebview?.api) return true;
+
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      const finish = (ready: boolean) => {
+        if (resolved) return;
+        resolved = true;
+        window.removeEventListener('pywebviewready', onReady);
+        clearInterval(interval);
+        clearTimeout(timer);
+        resolve(ready);
+      };
+
+      const onReady = () => finish(true);
+      window.addEventListener('pywebviewready', onReady);
+
+      const interval = setInterval(() => {
+        if (window.pywebview?.api) {
+          finish(true);
+        }
+      }, 25);
+
+      const timer = setTimeout(() => {
+        finish(!!window.pywebview?.api);
+      }, timeoutMs);
+    });
+  },
+
   async setMiniMode(isMini: boolean): Promise<boolean> {
     if (window.pywebview?.api?.set_mini_mode) {
       try {

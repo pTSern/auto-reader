@@ -106,13 +106,42 @@ export function splitTextIntoChunks(
   return chunks;
 }
 
+const CPU_THREADS_STORAGE_KEY = 'voiceflow_global_cpu_threads';
+
+export function getMaxHardwareThreads(): number {
+  return typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
+}
+
+export function getGlobalCpuThreads(): number {
+  const maxThreads = getMaxHardwareThreads();
+  const defaultThreads = Math.min(3, maxThreads);
+  try {
+    const saved = localStorage.getItem(CPU_THREADS_STORAGE_KEY);
+    if (saved) {
+      const parsed = parseInt(saved, 10);
+      if (!isNaN(parsed) && parsed >= 1 && parsed <= maxThreads) {
+        return parsed;
+      }
+    }
+  } catch (e) {}
+  return defaultThreads;
+}
+
+export function setGlobalCpuThreads(threads: number): void {
+  const maxThreads = getMaxHardwareThreads();
+  const clamped = Math.max(1, Math.min(maxThreads, threads));
+  try {
+    localStorage.setItem(CPU_THREADS_STORAGE_KEY, String(clamped));
+  } catch (e) {}
+}
+
 /**
  * Detects hardware concurrency to adapt shadow pre-generation
  */
 export function getHardwareProfile(): { cores: number; isStrongCpu: boolean; defaultConcurrency: number } {
-  const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
+  const cores = getMaxHardwareThreads();
   const isStrongCpu = cores >= 8;
-  const defaultConcurrency = isStrongCpu ? 3 : 1; // 1 for standard/potato CPU, up to 3 for strong CPU
+  const defaultConcurrency = getGlobalCpuThreads();
 
   return { cores, isStrongCpu, defaultConcurrency };
 }
@@ -192,16 +221,17 @@ export class ChunkCoordinator {
     }
 
     // Phase 2: Shadow generation for remaining chunks (Chunks 1..N)
-    const { isStrongCpu } = getHardwareProfile();
+    const userConfiguredThreads = getGlobalCpuThreads();
+    const maxDeviceThreads = getMaxHardwareThreads();
     let maxConcurrent = 1;
 
     if (this.shadowSettings.enabled) {
-      if (this.shadowSettings.concurrencyMode === 'aggressive' || (this.shadowSettings.concurrencyMode === 'auto' && isStrongCpu)) {
-        maxConcurrent = Math.min(3, this.chunks.length - 1);
-        Logger.info(`Shadow generation: High performance mode enabled (${maxConcurrent} parallel workers).`);
+      if (this.shadowSettings.concurrencyMode === 'potato') {
+        maxConcurrent = 1;
+        Logger.info('Shadow generation: Potato mode active (1 background worker).');
       } else {
-        maxConcurrent = 1; // Standard / potato mode: 1 worker at a time
-        Logger.info('Shadow generation: Standard potato mode (1 background worker at a time).');
+        maxConcurrent = Math.min(userConfiguredThreads, Math.max(1, this.chunks.length - 1));
+        Logger.info(`Shadow generation: Using ${maxConcurrent} CPU worker threads (User config: ${userConfiguredThreads}/${maxDeviceThreads} threads).`);
       }
     } else {
       maxConcurrent = 1;
@@ -350,6 +380,61 @@ export class ChunkCoordinator {
       }
     }
     return all;
+  }
+
+  /**
+   * Fast-scans and hydrates all chunks that already exist on disk.
+   * Enables instant playback of existing chunks without running synthesis.
+   */
+  public async hydrateCachedChunks(): Promise<{
+    readyCount: number;
+    totalCount: number;
+    chunks: TextChunk[];
+    cues: TimedCue[];
+    firstReadyChunk?: TextChunk;
+  }> {
+    if (!this.projectId || !DesktopBridge.isDesktop()) {
+      this.recalculateOffsets();
+      return {
+        readyCount: 0,
+        totalCount: this.chunks.length,
+        chunks: [...this.chunks],
+        cues: this.getAllCues(),
+      };
+    }
+
+    let readyCount = 0;
+    for (let i = 0; i < this.chunks.length; i++) {
+      const ch = this.chunks[i];
+      const isCached = await DesktopBridge.checkChunkCache(this.projectId, i, this.voiceModel);
+      if (isCached) {
+        const audioUrl = await DesktopBridge.getChunkAudioUrl(this.projectId, i, this.voiceModel);
+        if (audioUrl) {
+          ch.audioUrl = audioUrl;
+          ch.status = 'ready';
+          if (!ch.rawCues || ch.rawCues.length === 0) {
+            ch.rawCues = generateEstimatedCues(ch.text);
+          }
+          const lastCue = ch.rawCues[ch.rawCues.length - 1];
+          ch.duration = lastCue ? lastCue.end : Math.max(3, ch.wordCount * 0.4);
+          readyCount++;
+        }
+      }
+    }
+
+    this.recalculateOffsets();
+    const cues = this.getAllCues();
+    const firstReady = this.chunks.find((c) => c.status === 'ready' && c.audioUrl);
+
+    Logger.info(`Hydrated ${readyCount}/${this.chunks.length} cached chunks from disk for project ${this.projectId}`);
+
+    return {
+      readyCount,
+      totalCount: this.chunks.length,
+      chunks: [...this.chunks],
+      cues,
+      firstReadyChunk: firstReady,
+    };
   }
 
   private getCompletedCount(): number {

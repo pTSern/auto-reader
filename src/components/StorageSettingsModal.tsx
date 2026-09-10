@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Folder, FolderOpen, ExternalLink, HardDrive, Check, RefreshCw, X, AlertCircle } from 'lucide-react';
+import { Folder, FolderOpen, ExternalLink, HardDrive, Check, RefreshCw, X, AlertCircle, Cpu, Sliders } from 'lucide-react';
 import { DesktopBridge, StorageInfo } from '../services/desktopBridge';
+import { getMaxHardwareThreads, getGlobalCpuThreads, setGlobalCpuThreads } from '../services/chunkingEngine';
 import { Logger } from '../services/logger';
 
 interface StorageSettingsModalProps {
@@ -19,6 +20,9 @@ export const StorageSettingsModal: React.FC<StorageSettingsModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const isDesktop = DesktopBridge.isDesktop();
+
+  const maxThreads = getMaxHardwareThreads();
+  const [cpuThreads, setCpuThreads] = useState<number>(getGlobalCpuThreads());
 
   useEffect(() => {
     if (isOpen && isDesktop) {
@@ -72,12 +76,12 @@ export const StorageSettingsModal: React.FC<StorageSettingsModalProps> = ({
         <div className="h-14 px-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/80 select-none">
           <div className="flex items-center space-x-3">
             <div className="p-2 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-400">
-              <HardDrive className="w-5 h-5" />
+              <Sliders className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-white">Project & Audio Disk Storage</h3>
+              <h3 className="text-sm font-semibold text-white">Storage & Global Settings</h3>
               <p className="text-[11px] text-slate-400">
-                Choose where projects, text metadata, and generated MP3 audio files are saved
+                Configure disk storage location and hardware CPU threads for shadow loading
               </p>
             </div>
           </div>
@@ -120,6 +124,44 @@ export const StorageSettingsModal: React.FC<StorageSettingsModalProps> = ({
                     {storageInfo?.total_size_mb ?? 0} MB
                   </div>
                 </div>
+              </div>
+
+              {/* Global CPU Threads Slider for Shadow Generation */}
+              <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Cpu className="w-4 h-4 text-cyan-400" />
+                    <span className="font-semibold text-white">Shadow Loading CPU Threads</span>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-500/40 font-mono text-xs font-bold">
+                    {cpuThreads} / {maxThreads} Threads
+                  </span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>1 Thread (Min)</span>
+                    <span className="text-slate-500 font-mono">Device Cores: {maxThreads}</span>
+                    <span>{maxThreads} Threads (Max Speed)</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={1}
+                    max={maxThreads}
+                    step={1}
+                    value={cpuThreads}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      setCpuThreads(val);
+                      setGlobalCpuThreads(val);
+                    }}
+                    className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                  />
+                </div>
+
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Controls how many background audio workers run concurrently during shadow pre-generation. Default is 3. Adjust between 1 and {maxThreads} based on your device.
+                </p>
               </div>
 
               {/* Folder Path Input & Picker */}

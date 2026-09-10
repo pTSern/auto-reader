@@ -244,12 +244,29 @@ class DesktopApi:
                     try:
                         with open(fp, "r", encoding="utf-8") as f:
                             p_data = json.load(f)
-                            # Check if audio exists on disk
-                            mp3_path = os.path.join(p_dir, folder, "combined.mp3")
-                            p_data["hasDiskAudio"] = os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0
-                            if p_data["hasDiskAudio"]:
+                            proj_path = os.path.join(p_dir, folder)
+
+                            # Check if combined audio exists directly
+                            mp3_path = os.path.join(proj_path, "combined.mp3")
+                            has_combined = os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0
+                            if has_combined:
                                 mtime = int(os.path.getmtime(mp3_path))
                                 p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/projects/{folder}/combined.mp3?t={mtime}"
+
+                            # Also check voice subpaths and chunk files
+                            total_chunks = 0
+                            for root, _, files in os.walk(proj_path):
+                                for fl in files:
+                                    if fl.endswith(".mp3"):
+                                        total_chunks += 1
+                                        if not has_combined and fl == "combined.mp3":
+                                            rel = os.path.relpath(os.path.join(root, fl), proj_path).replace("\\", "/")
+                                            mtime = int(os.path.getmtime(os.path.join(root, fl)))
+                                            p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/projects/{folder}/{rel}?t={mtime}"
+                                            has_combined = True
+
+                            p_data["hasDiskAudio"] = has_combined or total_chunks > 0
+                            p_data["diskChunkCount"] = total_chunks
                             projects.append(p_data)
                     except Exception as err:
                         print(f"Error loading {fp}: {err}")
@@ -270,16 +287,28 @@ class DesktopApi:
             with open(json_path, "r", encoding="utf-8") as f:
                 p_data = json.load(f)
 
-            # Check if combined.mp3 exists on disk
+            # Check if combined.mp3 exists on disk (root or subpaths)
             mp3_path = os.path.join(p_dir, "combined.mp3")
-            if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
+            has_combined = os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0
+            if has_combined:
                 mtime = int(os.path.getmtime(mp3_path))
                 p_data["hasDiskAudio"] = True
                 p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/projects/{project_id}/combined.mp3?t={mtime}"
-                p_data["diskAudioBase64"] = None
             else:
-                p_data["hasDiskAudio"] = False
+                total_chunks = 0
+                for root, _, files in os.walk(p_dir):
+                    for fl in files:
+                        if fl.endswith(".mp3"):
+                            total_chunks += 1
+                            if not has_combined and fl == "combined.mp3":
+                                rel = os.path.relpath(os.path.join(root, fl), p_dir).replace("\\", "/")
+                                mtime = int(os.path.getmtime(os.path.join(root, fl)))
+                                p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/projects/{project_id}/{rel}?t={mtime}"
+                                has_combined = True
+                p_data["hasDiskAudio"] = has_combined or total_chunks > 0
+                p_data["diskChunkCount"] = total_chunks
 
+            p_data["diskAudioBase64"] = None
             return p_data
         except Exception as e:
             self.write_log("error", f"Error loading single project {project_id}: {e}")
@@ -363,36 +392,56 @@ class DesktopApi:
             self.write_log("error", f"Error saving combined audio: {e}")
             return False
 
+    def _find_chunk_file_path(self, project_id: str, chunk_id: int, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> tuple[str | None, str]:
+        """
+        Locates chunk MP3 path on disk, supporting exact subpaths, legacy root paths,
+        and deep discovery across voice subdirectories.
+        Returns (abs_path, relative_url_path).
+        """
+        p_base = os.path.join(self.get_storage_dir(), "projects", project_id)
+        if not os.path.exists(p_base):
+            return None, ""
+
+        subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
+        # 1. Check exact subpath if provided
+        if subpath:
+            v_path = os.path.join(p_base, subpath, "chunks", f"chunk_{chunk_id}.mp3")
+            if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
+                rel = os.path.relpath(v_path, p_base).replace("\\", "/")
+                return v_path, rel
+
+        # 2. Check root legacy chunks folder
+        leg_path = os.path.join(p_base, "chunks", f"chunk_{chunk_id}.mp3")
+        if os.path.exists(leg_path) and os.path.getsize(leg_path) > 0:
+            rel = os.path.relpath(leg_path, p_base).replace("\\", "/")
+            return leg_path, rel
+
+        # 3. Deep discovery: scan any voice subpath folder under projects/<project_id>
+        fname = f"chunk_{chunk_id}.mp3"
+        for root, dirs, files in os.walk(p_base):
+            if fname in files:
+                full_path = os.path.join(root, fname)
+                if os.path.getsize(full_path) > 0:
+                    rel = os.path.relpath(full_path, p_base).replace("\\", "/")
+                    return full_path, rel
+
+        return None, ""
+
     def check_chunk_cache(self, project_id: str, chunk_id: int, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> bool:
         """Checks if a chunk MP3 file already exists on disk and is non-empty"""
         try:
-            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
-            if subpath:
-                v_path = os.path.join(self.get_storage_dir(), "projects", project_id, subpath, "chunks", f"chunk_{chunk_id}.mp3")
-                if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
-                    return True
-            # Legacy fallback
-            leg_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
-            return os.path.exists(leg_path) and os.path.getsize(leg_path) > 0
+            full_path, _ = self._find_chunk_file_path(project_id, chunk_id, voice_id, voice_locale, voice_gender, voice_name)
+            return full_path is not None
         except Exception:
             return False
 
     def get_chunk_audio_url(self, project_id: str, chunk_id: int, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str | None:
         """Returns HTTP streaming URL for a cached chunk"""
         try:
-            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
-            if subpath:
-                v_path = os.path.join(self.get_storage_dir(), "projects", project_id, subpath, "chunks", f"chunk_{chunk_id}.mp3")
-                if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
-                    mtime = int(os.path.getmtime(v_path))
-                    url_subpath = subpath.replace("\\", "/")
-                    return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/{url_subpath}/chunks/chunk_{chunk_id}.mp3?t={mtime}"
-
-            # Legacy fallback
-            leg_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
-            if os.path.exists(leg_path) and os.path.getsize(leg_path) > 0:
-                mtime = int(os.path.getmtime(leg_path))
-                return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/chunks/chunk_{chunk_id}.mp3?t={mtime}"
+            full_path, rel = self._find_chunk_file_path(project_id, chunk_id, voice_id, voice_locale, voice_gender, voice_name)
+            if full_path:
+                mtime = int(os.path.getmtime(full_path))
+                return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/{rel}?t={mtime}"
         except Exception as e:
             print(f"Error getting chunk audio URL: {e}")
         return None
@@ -400,22 +449,12 @@ class DesktopApi:
     def get_chunk_audio(self, project_id: str, chunk_id: int, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str | None:
         """Loads a cached chunk's MP3 file from disk as base64 data URI (fallback)"""
         try:
-            subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
-            target_path = None
-            if subpath:
-                v_path = os.path.join(self.get_storage_dir(), "projects", project_id, subpath, "chunks", f"chunk_{chunk_id}.mp3")
-                if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
-                    target_path = v_path
-
-            if not target_path:
-                leg_path = os.path.join(self.get_storage_dir(), "projects", project_id, "chunks", f"chunk_{chunk_id}.mp3")
-                if os.path.exists(leg_path) and os.path.getsize(leg_path) > 0:
-                    target_path = leg_path
-
-            if target_path:
-                with open(target_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("ascii")
-                    return f"data:audio/mp3;base64,{b64}"
+            full_path, _ = self._find_chunk_file_path(project_id, chunk_id, voice_id, voice_locale, voice_gender, voice_name)
+            if full_path:
+                with open(full_path, "rb") as f:
+                    data = f.read()
+                b64 = base64.b64encode(data).decode("utf-8")
+                return f"data:audio/mp3;base64,{b64}"
         except Exception as e:
             print(f"Error reading chunk audio: {e}")
         return None
@@ -423,19 +462,32 @@ class DesktopApi:
     def get_combined_audio_url(self, project_id: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str | None:
         """Returns HTTP streaming URL for a project's combined MP3"""
         try:
+            p_base = os.path.join(self.get_storage_dir(), "projects", project_id)
+            if not os.path.exists(p_base):
+                return None
+
             subpath = self._resolve_voice_subpath(voice_id, voice_locale, voice_gender, voice_name)
             if subpath:
-                v_path = os.path.join(self.get_storage_dir(), "projects", project_id, subpath, "combined.mp3")
+                v_path = os.path.join(p_base, subpath, "combined.mp3")
                 if os.path.exists(v_path) and os.path.getsize(v_path) > 0:
                     mtime = int(os.path.getmtime(v_path))
                     url_subpath = subpath.replace("\\", "/")
                     return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/{url_subpath}/combined.mp3?t={mtime}"
 
-            # Legacy fallback
-            leg_path = os.path.join(self.get_storage_dir(), "projects", project_id, "combined.mp3")
+            # Legacy fallback at project root
+            leg_path = os.path.join(p_base, "combined.mp3")
             if os.path.exists(leg_path) and os.path.getsize(leg_path) > 0:
                 mtime = int(os.path.getmtime(leg_path))
                 return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/combined.mp3?t={mtime}"
+
+            # Deep search for any combined.mp3 under project folder
+            for root, _, files in os.walk(p_base):
+                if "combined.mp3" in files:
+                    full_path = os.path.join(root, "combined.mp3")
+                    if os.path.getsize(full_path) > 0:
+                        rel = os.path.relpath(full_path, p_base).replace("\\", "/")
+                        mtime = int(os.path.getmtime(full_path))
+                        return f"http://127.0.0.1:{self._media_port}/projects/{project_id}/{rel}?t={mtime}"
         except Exception as e:
             print(f"Error getting combined audio URL: {e}")
         return None

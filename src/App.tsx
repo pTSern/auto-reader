@@ -7,6 +7,7 @@ import { BottomPlayerBar } from './components/BottomPlayerBar';
 import { FloatingMiniPlayer } from './components/FloatingMiniPlayer';
 import { VoiceSettingsModal } from './components/VoiceSettingsModal';
 import { ProjectManagerModal } from './components/ProjectManagerModal';
+import { ProjectSettingsModal } from './components/ProjectSettingsModal';
 import { StorageSettingsModal } from './components/StorageSettingsModal';
 import { LogViewerModal } from './components/LogViewerModal';
 import { MobileHeader } from './components/MobileHeader';
@@ -75,6 +76,8 @@ export function App() {
   const [isPinned, setIsPinned] = useState<boolean>(false);
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState<boolean>(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState<boolean>(false);
+  const [isProjectSettingsOpen, setIsProjectSettingsOpen] = useState<boolean>(false);
+  const [settingsTargetProject, setSettingsTargetProject] = useState<ProjectData | null>(null);
   const [isStorageModalOpen, setIsStorageModalOpen] = useState<boolean>(false);
   const [isLogModalOpen, setIsLogModalOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
@@ -148,41 +151,6 @@ export function App() {
       preloadAudioRef.current.load();
     }
   };
-
-  // Load Last Active Project from Memory on Startup
-  useEffect(() => {
-    async function initMemory() {
-      try {
-        const lastProject = await getLastActiveProject();
-        const all = await getAllProjects();
-        setProjectsList(all);
-
-        if (lastProject) {
-          setProject(lastProject);
-          setPlaybackSpeed(1.0);
-          setVolume(lastProject.voiceSettings.volume ?? 85);
-
-          // Restore saved listening progress
-          if (lastProject.playbackMemory.currentTime > 0) {
-            setCurrentTime(lastProject.playbackMemory.currentTime);
-            setDuration(lastProject.playbackMemory.duration || 0);
-            setActiveCueIndex(lastProject.playbackMemory.activeCueIndex || 0);
-
-            const mins = Math.floor(lastProject.playbackMemory.currentTime / 60);
-            const secs = Math.floor(lastProject.playbackMemory.currentTime % 60);
-            const timeStr = `${mins}:${String(secs).padStart(2, '0')}`;
-            setResumeNotification(
-              `Resumed "${lastProject.title}" at ${timeStr}. Press Play to continue.`
-            );
-            setTimeout(() => setResumeNotification(null), 5000);
-          }
-        }
-      } catch (err) {
-        console.warn('Could not restore last project session', err);
-      }
-    }
-    initMemory();
-  }, []);
 
   // Initialize and Bind Audio Elements
   useEffect(() => {
@@ -305,6 +273,153 @@ export function App() {
       preloadAudio.pause();
       preloadAudio.src = '';
     };
+  }, []);
+
+  // Auto-scan Chunks and Instantly Activate Selected Project with Restored Memory
+  const activateProject = async (selected: ProjectData, autoPlay: boolean = false) => {
+    setProject(selected);
+    setPlaybackSpeed(1.0);
+    const projVol = selected.voiceSettings?.volume ?? 85;
+    setVolume(projVol);
+
+    const savedTime = selected.playbackMemory?.currentTime || 0;
+    const savedDuration = selected.playbackMemory?.duration || 0;
+    const savedCueIndex = selected.playbackMemory?.activeCueIndex || 0;
+
+    setCurrentTime(savedTime);
+    setDuration(savedDuration);
+    setActiveCueIndex(savedCueIndex);
+    lastSavedTimeRef.current = savedTime;
+
+    // Refresh multi-voice statuses
+    if (selected.id) {
+      refreshVoiceStatuses(selected.id);
+    }
+
+    // 1. If combined audio exists, bind directly to combined URL
+    if (selected.audioUrl) {
+      isChunkStreamingRef.current = false;
+      if (audioRef.current) {
+        audioRef.current.src = selected.audioUrl;
+        audioRef.current.playbackRate = playbackSpeed;
+        audioRef.current.volume = projVol / 100;
+        if (savedTime > 0) {
+          audioRef.current.currentTime = savedTime;
+        }
+        if (autoPlay) {
+          audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+        }
+      }
+      const mins = Math.floor(savedTime / 60);
+      const secs = Math.floor(savedTime % 60);
+      setResumeNotification(`Opened "${selected.title}" (${mins}:${String(secs).padStart(2, '0')}). Ready to play.`);
+      setTimeout(() => setResumeNotification(null), 4000);
+      return;
+    }
+
+    // 2. If no combined audio, check and auto-scan disk chunks for instant playback
+    if (selected.textContent && selected.textContent.trim()) {
+      try {
+        const vModel = getVoiceById(selected.voiceSettings?.voiceId || 'en-US-JennyNeural');
+        const coordinator = new ChunkCoordinator(
+          selected.id,
+          selected.textContent,
+          selected.voiceSettings?.voiceId || 'en-US-JennyNeural',
+          selected.voiceSettings?.rate || 0,
+          selected.voiceSettings?.pitch || 0,
+          projVol,
+          selected.shadowSettings || { enabled: true, chunkSizeWords: 500, concurrencyMode: 'auto' },
+          () => {},
+          undefined,
+          undefined,
+          vModel
+        );
+
+        const hydrated = await coordinator.hydrateCachedChunks();
+        if (hydrated.readyCount > 0) {
+          isChunkStreamingRef.current = true;
+          chunksRef.current = hydrated.chunks;
+          cuesRef.current = hydrated.cues;
+
+          // Estimate total duration
+          const lastCue = hydrated.cues[hydrated.cues.length - 1];
+          const totalDur = lastCue ? lastCue.end : savedDuration;
+          setDuration(totalDur);
+
+          setChunkProgress({
+            completedChunks: hydrated.readyCount,
+            totalChunks: hydrated.totalCount,
+            activeChunkId: 0,
+          });
+
+          // Find which chunk covers the saved currentTime
+          let targetIdx = 0;
+          for (let i = 0; i < hydrated.chunks.length; i++) {
+            const ch = hydrated.chunks[i];
+            const chEnd = ch.offsetSeconds + (ch.duration || 10);
+            if (savedTime >= ch.offsetSeconds && savedTime < chEnd) {
+              targetIdx = i;
+              break;
+            }
+          }
+
+          currentChunkIndexRef.current = targetIdx;
+          const activeChunk = hydrated.chunks[targetIdx];
+          if (activeChunk && activeChunk.audioUrl && audioRef.current) {
+            audioRef.current.src = activeChunk.audioUrl;
+            audioRef.current.playbackRate = playbackSpeed;
+            audioRef.current.volume = projVol / 100;
+            audioRef.current.currentTime = Math.max(0, savedTime - activeChunk.offsetSeconds);
+            preloadNextChunk(targetIdx + 1);
+
+            if (autoPlay) {
+              audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+            }
+          }
+
+          setProject((prev) => ({
+            ...prev,
+            cues: hydrated.cues,
+            playbackMemory: {
+              ...prev.playbackMemory,
+              duration: totalDur,
+            },
+          }));
+
+          const mins = Math.floor(savedTime / 60);
+          const secs = Math.floor(savedTime % 60);
+          const timeStr = `${mins}:${String(secs).padStart(2, '0')}`;
+          setResumeNotification(
+            `Loaded "${selected.title}" (${hydrated.readyCount}/${hydrated.totalCount} chunks on disk). Memory restored at ${timeStr}.`
+          );
+          setTimeout(() => setResumeNotification(null), 5000);
+          Logger.info(`Auto-scanned ${hydrated.readyCount}/${hydrated.totalCount} chunks from disk for "${selected.title}". Ready for instant playback.`);
+        }
+      } catch (err) {
+        Logger.warn('Auto-scan chunks error:', err);
+      }
+    }
+  };
+
+  // Load Last Active Project from Memory on Startup (Wait for desktop bridge so disk projects load reliably)
+  useEffect(() => {
+    async function initMemory() {
+      try {
+        await DesktopBridge.ensureReady(3000);
+        const all = await getAllProjects();
+        setProjectsList(all);
+
+        const lastProject = await getLastActiveProject();
+        if (lastProject) {
+          await activateProject(lastProject, false);
+        } else if (all.length > 0) {
+          await activateProject(all[0], false);
+        }
+      } catch (err) {
+        console.warn('Could not restore last project session', err);
+      }
+    }
+    initMemory();
   }, []);
 
   // Update audio source when project.audioUrl changes (only in non-streaming or idle mode)
@@ -785,11 +900,9 @@ export function App() {
   };
 
   // Project Switching Handlers
-  const handleSelectProject = (selected: ProjectData) => {
-    setProject(selected);
-    setCurrentTime(selected.playbackMemory.currentTime || 0);
-    setActiveCueIndex(selected.playbackMemory.activeCueIndex || 0);
-    refreshVoiceStatuses(selected.id);
+  const handleSelectProject = async (selected: ProjectData) => {
+    stopAudio();
+    await activateProject(selected, false);
   };
 
   const handleNewProject = () => {
@@ -874,6 +987,10 @@ export function App() {
               isPinned={isPinned}
               onTogglePin={handleTogglePin}
               onOpenProjects={() => setIsProjectModalOpen(true)}
+              onOpenProjectSettings={() => {
+                setSettingsTargetProject(project);
+                setIsProjectSettingsOpen(true);
+              }}
               onOpenLogs={() => setIsLogModalOpen(true)}
               onOpenStorageSettings={() => setIsStorageModalOpen(true)}
               projectTitle={project.title}
@@ -1027,7 +1144,34 @@ export function App() {
           if (!isPlaying) togglePlay();
         }}
         onOpenStorageSettings={() => setIsStorageModalOpen(true)}
+        onEditProjectSettings={(p) => {
+          setSettingsTargetProject(p);
+          setIsProjectSettingsOpen(true);
+        }}
       />
+
+      {/* Project-level Settings Modal */}
+      {settingsTargetProject && (
+        <ProjectSettingsModal
+          isOpen={isProjectSettingsOpen}
+          onClose={() => {
+            setIsProjectSettingsOpen(false);
+            setSettingsTargetProject(null);
+          }}
+          project={settingsTargetProject}
+          onSaveProjectSettings={async (updated) => {
+            if (updated.id === project.id) {
+              setProject(updated);
+            }
+            await saveProject(updated, false);
+            const all = await getAllProjects();
+            setProjectsList(all);
+            setIsProjectSettingsOpen(false);
+            setSettingsTargetProject(null);
+            Logger.info(`Updated project settings for "${updated.title}"`);
+          }}
+        />
+      )}
 
       {/* Disk & Folder Storage Settings Modal */}
       <StorageSettingsModal
