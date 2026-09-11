@@ -14,6 +14,7 @@ interface WorkspacePanelProps {
   totalChunks?: number;
   currentChunkIndex?: number;
   onJumpToChunk?: (chunkNumber: number) => void;
+  onOpenSettings?: () => void;
 }
 
 export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
@@ -27,6 +28,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
   totalChunks = 0,
   currentChunkIndex = 0,
   onJumpToChunk,
+  onOpenSettings,
 }) => {
   const [tab, setTab] = useState<'subtitle' | 'edit'>('subtitle');
   const [searchQuery, setSearchQuery] = useState('');
@@ -312,7 +314,22 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                 <Subtitles className="w-10 h-10 mx-auto text-slate-600 opacity-60" />
                 <p>No audio generated yet.</p>
                 <p className="text-xs text-slate-600">
-                  Click <strong className="text-cyan-400">"Generate Audio"</strong> on the right to synthesize speech with real-time sentence timestamps.
+                  {onOpenSettings ? (
+                    <>
+                      Click or tap{' '}
+                      <button
+                        onClick={onOpenSettings}
+                        className="text-cyan-400 font-semibold underline hover:text-cyan-300 transition cursor-pointer"
+                      >
+                        &ldquo;Generate Audio&rdquo;
+                      </button>{' '}
+                      to synthesize speech with real-time sentence timestamps.
+                    </>
+                  ) : (
+                    <>
+                      Click <strong className="text-cyan-400">&ldquo;Generate Audio&rdquo;</strong> to synthesize speech with real-time sentence timestamps.
+                    </>
+                  )}
                 </p>
               </div>
             ) : isSearching && items.length === 0 ? (

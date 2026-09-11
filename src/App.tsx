@@ -12,6 +12,8 @@ import { StorageSettingsModal } from './components/StorageSettingsModal';
 import { LogViewerModal } from './components/LogViewerModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobilePlayerSheet } from './components/MobilePlayerSheet';
+import { MobileFileIngestModal } from './components/MobileFileIngestModal';
+import { MobileSettingsModal } from './components/MobileSettingsModal';
 import { ProjectData, FileReference, VoiceModel, TimedCue, ViewMode, TextChunk, VoiceTrackStatus, PlaybackMemory } from './types';
 import { getVoiceById, getVoiceFolderSubpath } from './services/voicesCatalog';
 import { exportToSrt } from './services/edgeTtsClient';
@@ -96,6 +98,8 @@ export function App() {
   const [settingsTargetProject, setSettingsTargetProject] = useState<ProjectData | null>(null);
   const [isStorageModalOpen, setIsStorageModalOpen] = useState<boolean>(false);
   const [isLogModalOpen, setIsLogModalOpen] = useState<boolean>(false);
+  const [isFileModalOpen, setIsFileModalOpen] = useState<boolean>(false);
+  const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [chunkProgress, setChunkProgress] = useState<{
@@ -1185,8 +1189,10 @@ export function App() {
           {/* Mobile Header (visible on mobile only) */}
           <div className="sm:hidden">
             <MobileHeader
+              onOpenFileIngest={() => setIsFileModalOpen(true)}
               onOpenProjects={() => setIsProjectModalOpen(true)}
               onOpenVoiceModal={() => setIsVoiceModalOpen(true)}
+              onOpenMobileSettings={() => setIsMobileSettingsOpen(true)}
               selectedVoice={selectedVoice}
               isPinned={isPinned}
               onTogglePin={handleTogglePin}
@@ -1222,6 +1228,7 @@ export function App() {
               totalChunks={chunkProgress?.totalChunks || splitTextIntoChunks(project.textContent, project.shadowSettings?.chunkSizeWords || 500).length}
               currentChunkIndex={currentChunkIndexRef.current}
               onJumpToChunk={handleJumpToChunk}
+              onOpenSettings={() => setIsMobileSettingsOpen(true)}
             />
 
             {/* Right: Voice Settings & Synthesis Panel */}
@@ -1410,6 +1417,60 @@ export function App() {
       <LogViewerModal
         isOpen={isLogModalOpen}
         onClose={() => setIsLogModalOpen(false)}
+      />
+
+      {/* Mobile / Android File Ingest & Upload Modal (3-line button) */}
+      <MobileFileIngestModal
+        isOpen={isFileModalOpen}
+        onClose={() => setIsFileModalOpen(false)}
+        files={project.fileRefs}
+        onAddFiles={handleAddFiles}
+        onRemoveFile={handleRemoveFile}
+        onExtractAll={handleExtractAll}
+        isExtracting={isExtracting}
+        wordCount={stats.wordCount}
+        charCount={stats.charCount}
+        estDuration={stats.estDuration}
+      />
+
+      {/* Mobile / Android Settings Modal (CPU Threads, Shadow Loading, Speech Tuning) */}
+      <MobileSettingsModal
+        isOpen={isMobileSettingsOpen}
+        onClose={() => setIsMobileSettingsOpen(false)}
+        selectedVoice={selectedVoice}
+        onOpenVoiceModal={() => setIsVoiceModalOpen(true)}
+        voiceStatus={voiceStatuses[getVoiceFolderSubpath(selectedVoice)] || voiceStatuses[selectedVoice.id]}
+        speed={project.voiceSettings.rate}
+        onSpeedChange={(r) =>
+          setProject((p) => ({
+            ...p,
+            voiceSettings: { ...p.voiceSettings, rate: r },
+          }))
+        }
+        pitch={project.voiceSettings.pitch}
+        onPitchChange={(pitch) =>
+          setProject((p) => ({
+            ...p,
+            voiceSettings: { ...p.voiceSettings, pitch },
+          }))
+        }
+        volume={volume}
+        onVolumeChange={setVolume}
+        onGenerateAudio={handleGenerateAudio}
+        onStopGenerating={handleStopGenerating}
+        isGenerating={isGenerating}
+        shadowSettings={project.shadowSettings}
+        onShadowSettingsChange={(settings) =>
+          setProject((p) => ({
+            ...p,
+            shadowSettings: settings,
+          }))
+        }
+        chunkProgress={chunkProgress}
+        onExportMp3={handleExportMp3}
+        onExportSrt={handleExportSrt}
+        hasAudio={!!project.audioBlob}
+        onOpenStorageSettings={() => setIsStorageModalOpen(true)}
       />
     </div>
   );
