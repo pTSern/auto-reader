@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Edit3, Subtitles, Wand2, Copy, Check, Trash2, Play, Search, X, FastForward } from 'lucide-react';
+import { Edit3, Subtitles, Wand2, Copy, Check, Trash2, Play, Search, X, FastForward, Sparkles } from 'lucide-react';
 import { TimedCue } from '../types';
 import { unwrapLines } from '../services/pdfExtractor';
 
@@ -371,17 +371,16 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                 {visibleItems.map(({ cue, originalIndex: idx }) => {
                   const isActive = idx === activeCueIndex;
                   const isPast = idx < activeCueIndex;
-                  // Only allow selecting subtitle line that is done generated
                   const isLineReady = cue.isReady !== false && (!isReadonly || cue.isReady === true);
 
                   return (
                     <div
                       key={cue.id}
                       ref={isActive ? activeSentenceRef : null}
-                      onClick={isLineReady ? () => onSeekToCue(cue) : undefined}
+                      onClick={() => onSeekToCue(cue)}
                       className={`group p-3.5 rounded-xl transition-all duration-300 text-sm leading-relaxed border select-text ${
                         !isLineReady
-                          ? 'bg-slate-950/20 border-dashed border-slate-800/60 opacity-40 grayscale cursor-not-allowed select-none'
+                          ? 'bg-slate-900/30 border-dashed border-amber-500/40 text-slate-400 hover:border-amber-400/80 hover:bg-amber-950/20 hover:text-slate-200 cursor-pointer shadow-sm'
                           : isActive
                           ? 'bg-cyan-950/50 border-cyan-400 text-white shadow-[0_0_20px_rgba(56,189,248,0.25)] scale-[1.01] cursor-pointer'
                           : isPast
@@ -392,7 +391,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                       {/* Timestamp & Active Indicator Badge */}
                       <div className="flex items-center justify-between text-[11px] mb-1.5 select-none font-mono">
                         <span className={`inline-flex items-center space-x-1.5 ${
-                          !isLineReady ? 'text-slate-600' : isActive ? 'text-cyan-400 font-semibold' : 'text-slate-500'
+                          !isLineReady ? 'text-amber-400/70' : isActive ? 'text-cyan-400 font-semibold' : 'text-slate-500'
                         }`}>
                           {isActive && <Play className="w-3 h-3 fill-cyan-400 animate-pulse" />}
                           <span>{formatTime(cue.start)}</span>
@@ -409,9 +408,9 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                         </span>
 
                         {!isLineReady ? (
-                          <span className="text-[10px] text-slate-500 flex items-center space-x-1.5 font-sans bg-slate-900/80 px-2 py-0.5 rounded border border-slate-800">
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-600 animate-pulse" />
-                            <span>Not loaded yet</span>
+                          <span className="text-[10px] text-amber-400/90 flex items-center space-x-1.5 font-sans bg-amber-950/50 px-2 py-0.5 rounded border border-amber-800/60 group-hover:border-amber-500/80 group-hover:text-amber-300 transition-colors">
+                            <Sparkles className="w-3 h-3 text-amber-400 animate-pulse" />
+                            <span>Click to synthesize & play</span>
                           </span>
                         ) : (
                           <span className="text-[10px] text-slate-500 group-hover:text-cyan-400 transition-colors">
@@ -420,7 +419,7 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({
                         )}
                       </div>
 
-                      <p className={!isLineReady ? 'text-slate-500 italic' : isActive ? 'font-medium text-slate-50' : ''}>
+                      <p className={!isLineReady ? 'text-slate-400 italic group-hover:text-slate-200' : isActive ? 'font-medium text-slate-50' : ''}>
                         {highlightMatch(cue.text, searchQuery)}
                       </p>
                     </div>

@@ -121,6 +121,51 @@ class DesktopApi:
             print(f"Read config error: {e}")
         return DEFAULT_STORAGE_DIR
 
+    def _read_project_json(self, json_path: str) -> dict | None:
+        """Robust JSON loader that handles trailing garbage bytes via raw_decode and auto-repairs on disk"""
+        if not json_path or not os.path.isfile(json_path):
+            return None
+        try:
+            with open(json_path, "r", encoding="utf-8", errors="replace") as f:
+                raw_text = f.read()
+
+            if not raw_text.strip():
+                return None
+
+            try:
+                return json.loads(raw_text)
+            except json.JSONDecodeError:
+                # If extra data at end or slight corruption, decode first valid JSON object
+                decoder = json.JSONDecoder()
+                data, end_idx = decoder.raw_decode(raw_text.lstrip())
+                # Auto-repair the corrupted file on disk with clean JSON
+                try:
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                        f.truncate()
+                    self.write_log("info", f"Auto-repaired corrupted project JSON at {json_path} (removed trailing bytes)")
+                except Exception:
+                    pass
+                return data
+        except Exception as e:
+            self.write_log("error", f"Failed to read project json at {json_path}: {e}")
+            return None
+
+    def _write_project_json(self, json_path: str, data: dict) -> bool:
+        """Safely and atomically writes JSON to disk, preventing trailing byte corruption"""
+        try:
+            os.makedirs(os.path.dirname(json_path), exist_ok=True)
+            temp_path = f"{json_path}.tmp_{os.getpid()}_{int(time.time()*1000)}"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, json_path)
+            return True
+        except Exception as e:
+            self.write_log("error", f"Error saving project json to {json_path}: {e}")
+            return False
+
     def _find_project_dir(self, project_id: str) -> str:
         """Finds existing project directory anywhere in storage_dir, or defaults to <storage_dir>/projects/<project_id>"""
         base = self.get_storage_dir()
@@ -141,10 +186,9 @@ class DesktopApi:
                     continue
                 if "project.json" in files:
                     try:
-                        with open(os.path.join(root, "project.json"), "r", encoding="utf-8") as f:
-                            p_data = json.load(f)
-                            if p_data.get("id") == project_id:
-                                return root
+                        p_data = self._read_project_json(os.path.join(root, "project.json"))
+                        if p_data and p_data.get("id") == project_id:
+                            return root
                     except Exception:
                         pass
         return p1
@@ -159,10 +203,9 @@ class DesktopApi:
 
         def process_project_file(json_file_path: str, proj_folder: str):
             try:
-                if not os.path.isfile(json_file_path):
+                p_data = self._read_project_json(json_file_path)
+                if not p_data:
                     return
-                with open(json_file_path, "r", encoding="utf-8") as f:
-                    p_data = json.load(f)
 
                 pid = p_data.get("id")
                 if not pid or pid in seen_ids:
@@ -329,8 +372,7 @@ class DesktopApi:
             to_save["audioUrl"] = None
 
             json_path = os.path.join(p_dir, "project.json")
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(to_save, f, ensure_ascii=False, indent=2)
+            self._write_project_json(json_path, to_save)
 
             self.write_log("info", f"Saved project '{to_save.get('title')}' ({pid}) to disk at {json_path}")
             return True
@@ -343,19 +385,14 @@ class DesktopApi:
         try:
             p_dir = self._find_project_dir(project_id)
             json_path = os.path.join(p_dir, "project.json")
-            if not os.path.exists(json_path):
+            p_data = self._read_project_json(json_path)
+            if not p_data:
                 return False
-
-            with open(json_path, "r", encoding="utf-8") as f:
-                p_data = json.load(f)
 
             p_data["playbackMemory"] = memory
             p_data["updatedAt"] = int(time.time() * 1000)
 
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(p_data, f, ensure_ascii=False, indent=2)
-
-            return True
+            return self._write_project_json(json_path, p_data)
         except Exception as e:
             self.write_log("error", f"Error updating playback memory on disk: {e}")
             return False
@@ -373,11 +410,9 @@ class DesktopApi:
         try:
             p_dir = self._find_project_dir(project_id)
             json_path = os.path.join(p_dir, "project.json")
-            if not os.path.exists(json_path):
+            p_data = self._read_project_json(json_path)
+            if not p_data:
                 return None
-
-            with open(json_path, "r", encoding="utf-8") as f:
-                p_data = json.load(f)
 
             # Check if combined.mp3 exists on disk (root or subpaths)
             mp3_path = os.path.join(p_dir, "combined.mp3")
@@ -726,6 +761,71 @@ class DesktopApi:
             self.write_log("error", f"Error scanning project voice statuses: {e}")
 
         return results
+
+    def cleanup_project_audio(self, project_id: str, voice_subpath: str = None) -> dict:
+        """Deletes all generated .mp3 chunks and .cues.json files for a project, keeping project.json intact"""
+        try:
+            p_dir = self._find_project_dir(project_id)
+            if not os.path.exists(p_dir):
+                return {"success": False, "freed_mb": 0, "deleted_count": 0}
+
+            target_dir = os.path.join(p_dir, voice_subpath) if voice_subpath else p_dir
+            deleted_count = 0
+            freed_bytes = 0
+
+            for root, dirs, files in os.walk(target_dir):
+                for fl in files:
+                    if fl.endswith(".mp3") or fl.endswith(".cues.json"):
+                        fp = os.path.join(root, fl)
+                        try:
+                            freed_bytes += os.path.getsize(fp)
+                            os.remove(fp)
+                            deleted_count += 1
+                        except Exception:
+                            pass
+
+            freed_mb = round(freed_bytes / (1024 * 1024), 2)
+            self.write_log("info", f"Cleaned up audio for project {project_id}: deleted {deleted_count} files, freed {freed_mb} MB")
+
+            # Update project.json on disk: clear hasDiskAudio and audioHttpUrl
+            p_data = self._read_project_json(os.path.join(p_dir, "project.json"))
+            if p_data:
+                p_data["hasDiskAudio"] = False
+                p_data["diskChunkCount"] = 0
+                p_data["audioHttpUrl"] = None
+                p_data["audioBlob"] = None
+                p_data["audioUrl"] = None
+                self._write_project_json(os.path.join(p_dir, "project.json"), p_data)
+
+            return {"success": True, "freed_mb": freed_mb, "deleted_count": deleted_count}
+        except Exception as e:
+            self.write_log("error", f"Error cleaning up project audio: {e}")
+            return {"success": False, "freed_mb": 0, "deleted_count": 0}
+
+    def get_project_audio_size(self, project_id: str, voice_subpath: str = None) -> dict:
+        """Calculates total disk usage of audio files for a project without deleting anything"""
+        try:
+            p_dir = self._find_project_dir(project_id)
+            if not os.path.exists(p_dir):
+                return {"size_mb": 0, "file_count": 0}
+
+            target_dir = os.path.join(p_dir, voice_subpath) if voice_subpath else p_dir
+            total_bytes = 0
+            file_count = 0
+
+            for root, dirs, files in os.walk(target_dir):
+                for fl in files:
+                    if fl.endswith(".mp3") or fl.endswith(".cues.json"):
+                        fp = os.path.join(root, fl)
+                        try:
+                            total_bytes += os.path.getsize(fp)
+                            file_count += 1
+                        except Exception:
+                            pass
+
+            return {"size_mb": round(total_bytes / (1024 * 1024), 2), "file_count": file_count}
+        except Exception:
+            return {"size_mb": 0, "file_count": 0}
 
     def delete_project_from_disk(self, project_id: str) -> bool:
         """Deletes the project folder and all its audio files from disk"""

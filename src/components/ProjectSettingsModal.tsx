@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { X, Settings, Check, Volume2, FastForward, Sliders, Layers, Sparkles, Zap } from 'lucide-react';
+import { X, Settings, Check, Volume2, FastForward, Sliders, Layers, Sparkles, Zap, Trash2, HardDrive } from 'lucide-react';
 import { ProjectData } from '../types';
+import { DesktopBridge } from '../services/desktopBridge';
 
 interface ProjectSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   project: ProjectData;
   onSaveProjectSettings: (updated: ProjectData) => Promise<void>;
+  onAudioCleaned?: () => void;
 }
 
 export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
@@ -14,6 +16,7 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
   onClose,
   project,
   onSaveProjectSettings,
+  onAudioCleaned,
 }) => {
   const [title, setTitle] = useState(project.title);
   const [rate, setRate] = useState(project.voiceSettings.rate ?? 0);
@@ -29,6 +32,9 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
 
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [audioUsage, setAudioUsage] = useState<{ size_mb: number; file_count: number }>({ size_mb: 0, file_count: 0 });
+  const [isCleaning, setIsCleaning] = useState(false);
+  const [cleanedFreedMb, setCleanedFreedMb] = useState<number | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -42,10 +48,31 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
       setConcurrencyMode(project.shadowSettings?.concurrencyMode ?? 'auto');
       setSyncOffsetSec(project.swiftSettings?.syncOffsetSec ?? 0.20);
       setSavedSuccess(false);
+      setCleanedFreedMb(null);
+      if (DesktopBridge.isDesktop() && project.id) {
+        DesktopBridge.getProjectAudioSize(project.id).then((usage) => {
+          setAudioUsage(usage);
+        });
+      }
     }
   }, [isOpen, project]);
 
   if (!isOpen) return null;
+
+  const handleCleanAudio = async () => {
+    if (!project.id || !DesktopBridge.isDesktop()) return;
+    setIsCleaning(true);
+    try {
+      const res = await DesktopBridge.cleanupProjectAudio(project.id);
+      if (res.success) {
+        setCleanedFreedMb(res.freed_mb);
+        setAudioUsage({ size_mb: 0, file_count: 0 });
+        onAudioCleaned?.();
+      }
+    } finally {
+      setIsCleaning(false);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -332,6 +359,53 @@ export const ProjectSettingsModal: React.FC<ProjectSettingsModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Audio Storage & Disk Cache */}
+          {DesktopBridge.isDesktop() && (
+            <div className="p-4 rounded-xl bg-slate-950/50 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <HardDrive className="w-4 h-4 text-cyan-400" />
+                  <div>
+                    <span className="text-sm font-semibold text-white">Audio Storage & Cache</span>
+                    <p className="text-[11px] text-slate-400">
+                      Generated MP3 chunks and audio timing files on disk.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  <span className="text-xs font-mono font-bold text-amber-400">
+                    {audioUsage.size_mb > 0 ? `${audioUsage.size_mb} MB` : '0 MB'}
+                  </span>
+                  <div className="text-[10px] text-slate-500 font-mono">
+                    {audioUsage.file_count} chunks
+                  </div>
+                </div>
+              </div>
+
+              {cleanedFreedMb !== null && (
+                <div className="p-2 rounded bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300 flex items-center space-x-1.5">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Cleaned audio successfully! Freed {cleanedFreedMb} MB.</span>
+                </div>
+              )}
+
+              {audioUsage.file_count > 0 && (
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={handleCleanAudio}
+                    disabled={isCleaning}
+                    className="py-1.5 px-3 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/50 hover:border-rose-500 text-rose-300 font-medium text-xs flex items-center space-x-1.5 transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{isCleaning ? 'Cleaning...' : 'Clean Audio Files (Free Space)'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Footer Controls */}
           <div className="pt-2 flex items-center justify-between border-t border-slate-800">

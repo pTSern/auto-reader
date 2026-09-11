@@ -110,6 +110,8 @@ declare global {
           byteLength?: number;
           error?: string;
         }>;
+        cleanup_project_audio?: (projectId: string, voiceSubpath?: string) => Promise<{ success: boolean; freed_mb: number; deleted_count: number }>;
+        get_project_audio_size?: (projectId: string, voiceSubpath?: string) => Promise<{ size_mb: number; file_count: number }>;
       };
     };
   }
@@ -447,6 +449,34 @@ export const DesktopBridge = {
       }
     }
     return false;
+  },
+
+  async cleanupProjectAudio(
+    projectId: string,
+    voiceSubpath?: string
+  ): Promise<{ success: boolean; freed_mb: number; deleted_count: number }> {
+    if (window.pywebview?.api?.cleanup_project_audio) {
+      try {
+        return await window.pywebview.api.cleanup_project_audio(projectId, voiceSubpath);
+      } catch (e) {
+        console.warn('Failed to cleanup project audio via desktop bridge', e);
+      }
+    }
+    return { success: false, freed_mb: 0, deleted_count: 0 };
+  },
+
+  async getProjectAudioSize(
+    projectId: string,
+    voiceSubpath?: string
+  ): Promise<{ size_mb: number; file_count: number }> {
+    if (window.pywebview?.api?.get_project_audio_size) {
+      try {
+        return await window.pywebview.api.get_project_audio_size(projectId, voiceSubpath);
+      } catch (e) {
+        console.warn('Failed to get project audio size via desktop bridge', e);
+      }
+    }
+    return { size_mb: 0, file_count: 0 };
   },
 
   async synthesizeSpeech(

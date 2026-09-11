@@ -188,31 +188,71 @@ export class ChunkCoordinator {
   }
 
 
+  private pendingQueue: number[] = [];
+
   public abort() {
     this.isAborted = true;
+    this.pendingQueue = [];
     Logger.warn('Audio generation aborted by user');
   }
 
-  public async start(): Promise<{ combinedBlob: Blob; combinedUrl: string; combinedCues: TimedCue[] }> {
+  public prioritizeChunk(targetChunkId: number): boolean {
+    if (targetChunkId < 0 || targetChunkId >= this.chunks.length) return false;
+    const chunk = this.chunks[targetChunkId];
+    if (chunk.status === 'ready') {
+      return true;
+    }
+    // Remove from queue if present and prepend to the front
+    this.pendingQueue = this.pendingQueue.filter((id) => id !== targetChunkId);
+    this.pendingQueue.unshift(targetChunkId);
+    Logger.info(`Chunk Coordinator: Prioritized Chunk #${targetChunkId + 1} to front of generation queue.`);
+    return true;
+  }
+
+  public async ensureChunkReady(targetChunkId: number): Promise<TextChunk | null> {
+    if (targetChunkId < 0 || targetChunkId >= this.chunks.length) return null;
+    const chunk = this.chunks[targetChunkId];
+    if (chunk.status === 'ready') return chunk;
+
+    this.prioritizeChunk(targetChunkId);
+
+    if (chunk.status !== 'generating') {
+      await this.synthesizeChunk(targetChunkId);
+      this.emitProgress(targetChunkId, true, this.getCompletedCount() === this.chunks.length);
+    } else {
+      let waited = 0;
+      while ((chunk.status as string) === 'generating' && waited < 120 && !this.isAborted) {
+        await new Promise((r) => setTimeout(r, 100));
+        waited++;
+      }
+    }
+    const finalChunk = this.chunks[targetChunkId];
+    return (finalChunk.status as string) === 'ready' ? finalChunk : null;
+  }
+
+  public async start(startChunkId: number = 0): Promise<{ combinedBlob: Blob; combinedUrl: string; combinedCues: TimedCue[] }> {
     if (this.chunks.length === 0) {
       throw new Error('No text to generate.');
     }
 
     this.isAborted = false;
-    Logger.info(`Starting chunk synthesis pipeline. Total chunks: ${this.chunks.length}`);
+    const clampedStart = Math.max(0, Math.min(this.chunks.length - 1, startChunkId));
+    Logger.info(`Starting chunk synthesis pipeline. Target start chunk: #${clampedStart + 1}, Total chunks: ${this.chunks.length}`);
 
-    // Phase 1: Immediately synthesize Chunk 0 (Fast Start)
-    await this.synthesizeChunk(0);
+    // Phase 1: Immediately synthesize or confirm startChunkId
+    if (this.chunks[clampedStart].status !== 'ready') {
+      await this.synthesizeChunk(clampedStart);
+    }
 
     if (this.isAborted) {
       throw new Error('Generation stopped by user.');
     }
 
-    const firstChunk = this.chunks[0];
-    if (firstChunk.status === 'ready') {
-      Logger.info(`Fast-start ready: Chunk 0 completed (${firstChunk.duration.toFixed(1)}s). Triggering playback!`);
-      this.onFirstChunkReady?.(firstChunk);
-      this.emitProgress(0, true, this.chunks.length === 1);
+    const startChunk = this.chunks[clampedStart];
+    if (startChunk.status === 'ready') {
+      Logger.info(`Playback ready: Chunk #${clampedStart + 1} completed (${startChunk.duration.toFixed(1)}s). Triggering playback!`);
+      this.onFirstChunkReady?.(startChunk);
+      this.emitProgress(clampedStart, true, this.getCompletedCount() === this.chunks.length);
     }
 
     // If only 1 chunk, we are done
@@ -220,7 +260,18 @@ export class ChunkCoordinator {
       return this.combineAllReadyChunks();
     }
 
-    // Phase 2: Shadow generation for remaining chunks (Chunks 1..N)
+    // Phase 2: Build bi-directional queue starting forward from clampedStart + 1 to N - 1, then wrapping 0 to clampedStart - 1
+    const sequence: number[] = [];
+    for (let i = clampedStart + 1; i < this.chunks.length; i++) {
+      sequence.push(i);
+    }
+    for (let i = 0; i < clampedStart; i++) {
+      sequence.push(i);
+    }
+
+    // Filter out chunks that are already loaded/ready from disk cache
+    this.pendingQueue = sequence.filter((idx) => this.chunks[idx].status !== 'ready');
+
     const userConfiguredThreads = getGlobalCpuThreads();
     const maxDeviceThreads = getMaxHardwareThreads();
     let maxConcurrent = 1;
@@ -238,13 +289,13 @@ export class ChunkCoordinator {
       Logger.info('Shadow generation OFF: Generating sequential next chunks in background.');
     }
 
-    // Worker pool for remaining chunks
-    let nextIndex = 1;
     const workerPromises: Promise<void>[] = [];
 
     const runWorker = async (workerId: number) => {
-      while (nextIndex < this.chunks.length && !this.isAborted) {
-        const chunkToProcess = nextIndex++;
+      while (this.pendingQueue.length > 0 && !this.isAborted) {
+        const chunkToProcess = this.pendingQueue.shift();
+        if (chunkToProcess === undefined) break;
+        if (this.chunks[chunkToProcess]?.status === 'ready') continue;
         await this.synthesizeChunk(chunkToProcess);
         this.emitProgress(chunkToProcess, true, this.getCompletedCount() === this.chunks.length);
       }
@@ -268,6 +319,7 @@ export class ChunkCoordinator {
     if (this.isAborted || index >= this.chunks.length) return;
 
     const chunk = this.chunks[index];
+    if (chunk.status === 'ready' || chunk.status === 'generating') return;
     chunk.status = 'generating';
     this.emitProgress(index, index > 0, false);
 

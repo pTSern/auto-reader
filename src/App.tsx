@@ -14,6 +14,7 @@ import { MobileHeader } from './components/MobileHeader';
 import { MobilePlayerSheet } from './components/MobilePlayerSheet';
 import { MobileFileIngestModal } from './components/MobileFileIngestModal';
 import { MobileSettingsModal } from './components/MobileSettingsModal';
+import { ProjectCleanupModal } from './components/ProjectCleanupModal';
 import { ProjectData, FileReference, VoiceModel, TimedCue, ViewMode, TextChunk, VoiceTrackStatus, PlaybackMemory } from './types';
 import { getVoiceById, getVoiceFolderSubpath } from './services/voicesCatalog';
 import { exportToSrt } from './services/edgeTtsClient';
@@ -100,6 +101,7 @@ export function App() {
   const [isLogModalOpen, setIsLogModalOpen] = useState<boolean>(false);
   const [isFileModalOpen, setIsFileModalOpen] = useState<boolean>(false);
   const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState<boolean>(false);
+  const [isCleanupModalOpen, setIsCleanupModalOpen] = useState<boolean>(false);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [chunkProgress, setChunkProgress] = useState<{
@@ -135,6 +137,7 @@ export function App() {
   const currentChunkIndexRef = useRef<number>(0);
   const isChunkStreamingRef = useRef<boolean>(false);
   const isBufferingNextChunkRef = useRef<boolean>(false);
+  const rapidJumpHistoryRef = useRef<number[]>([]);
 
   // Real-time playback position & memory tracking refs
   const projectIdRef = useRef<string>(project.id);
@@ -281,9 +284,19 @@ export function App() {
             Logger.info(`Buffering next section (Chunk ${nextIdx + 1})...`);
             return;
           }
+        } else {
+          // Reached end of final chunk in chunk-streaming mode!
+          setIsPlaying(false);
+          if (DesktopBridge.isDesktop() && projectIdRef.current) {
+            setIsCleanupModalOpen(true);
+          }
+          return;
         }
       }
       setIsPlaying(false);
+      if (DesktopBridge.isDesktop() && projectIdRef.current) {
+        setIsCleanupModalOpen(true);
+      }
     };
 
     const handleBeforeUnload = () => {
@@ -636,23 +649,69 @@ export function App() {
     triggerSeekSave(seconds);
   };
 
-  const seekToCue = (cue: TimedCue) => {
-    // Only allow selecting subtitle lines that are completed/ready
-    if (cue.isReady === false || (isGenerating && cue.isReady !== true)) {
-      Logger.warn(`Cannot seek to unloaded subtitle line "${cue.text.slice(0, 30)}..."`);
-      return;
-    }
+  const seekToCue = async (cue: TimedCue) => {
     const idx = cuesRef.current.findIndex((c) => c.id === cue.id);
     if (idx !== -1) {
       setActiveCueIndex(idx);
     }
-    seekTo(cue.start);
-    if (!isPlaying) {
-      togglePlay();
+
+    // Fast path: cue is already synthesized and ready
+    if (cue.isReady !== false && (!isGenerating || cue.isReady === true)) {
+      seekTo(cue.start);
+      if (!isPlaying) {
+        togglePlay();
+      }
+      triggerSeekSave(cue.start, idx !== -1 ? idx : undefined);
+      Logger.info(`Jumped to subtitle line #${(idx !== -1 ? idx : activeCueIndexRef.current) + 1}: progress saved at ${cue.start.toFixed(1)}s.`);
+      return;
     }
-    // Real-time save immediately when jumping to any subtitle line
-    triggerSeekSave(cue.start, idx !== -1 ? idx : undefined);
-    Logger.info(`Jumped to subtitle line #${(idx !== -1 ? idx : activeCueIndexRef.current) + 1}: progress saved at ${cue.start.toFixed(1)}s.`);
+
+    // Unloaded cue path: user clicked an unloaded subtitle line
+    const now = Date.now();
+    rapidJumpHistoryRef.current = rapidJumpHistoryRef.current.filter((t) => now - t < 3500);
+    rapidJumpHistoryRef.current.push(now);
+    const isRapid = rapidJumpHistoryRef.current.length >= 3;
+
+    let targetChunkId = cue.chunkId;
+    if (targetChunkId === undefined || targetChunkId < 0) {
+      const chunks = chunksRef.current;
+      for (let i = 0; i < chunks.length; i++) {
+        if (cue.start >= chunks[i].offsetSeconds) {
+          targetChunkId = i;
+        }
+      }
+    }
+    targetChunkId = targetChunkId ?? 0;
+
+    const lineNum = (idx !== -1 ? idx : 0) + 1;
+    if (isRapid) {
+      setResumeNotification(`⚠️ Jumping rapidly across unloaded sections! Prioritizing Chunk #${targetChunkId + 1} first...`);
+    } else {
+      setResumeNotification(`⚡ Generating Chunk #${targetChunkId + 1} for subtitle line #${lineNum}...`);
+    }
+    setTimeout(() => setResumeNotification(null), 4500);
+
+    // If coordinator is running, prioritize chunk dynamically
+    if (coordinatorRef.current) {
+      coordinatorRef.current.prioritizeChunk(targetChunkId);
+      const readyChunk = await coordinatorRef.current.ensureChunkReady(targetChunkId);
+      if (readyChunk && readyChunk.audioUrl && audioRef.current) {
+        isChunkStreamingRef.current = true;
+        currentChunkIndexRef.current = targetChunkId;
+        audioRef.current.src = readyChunk.audioUrl;
+        audioRef.current.playbackRate = playbackSpeed;
+        audioRef.current.volume = volume / 100;
+        const intraOffset = Math.max(0, cue.start - readyChunk.offsetSeconds);
+        audioRef.current.currentTime = intraOffset;
+        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+        setCurrentTime(cue.start);
+        if (idx !== -1) setActiveCueIndex(idx);
+        triggerSeekSave(cue.start, idx !== -1 ? idx : undefined);
+        preloadNextChunk(targetChunkId + 1);
+      }
+    } else {
+      startAudioPipeline(targetChunkId, cue.start, idx !== -1 ? idx : undefined);
+    }
   };
 
   // Fast Travel / Direct Jump to specific Chunk ID
@@ -740,20 +799,27 @@ export function App() {
     Logger.info(`Fast travelled to Chunk #${targetIdx + 1} at ${targetChunk.offsetSeconds.toFixed(1)}s (line #${targetCueNum}).`);
   };
 
-  // Generate Audio via ChunkCoordinator with Fast Start & Shadow Pre-gen
-  const handleGenerateAudio = async () => {
+  // Start or resume audio pipeline starting at a specific chunk ID and seek offset
+  const startAudioPipeline = async (
+    startChunkId: number = 0,
+    initialSeekTime: number = 0,
+    targetCueIndex?: number,
+    voiceOverride?: VoiceModel
+  ) => {
     if (!project.textContent || project.textContent.trim() === '') {
       alert('Please add or extract text first.');
       return;
     }
 
+    const voiceToUse = voiceOverride || selectedVoice;
     setIsGenerating(true);
-    Logger.info(`Initiating fast-start audio streaming pipeline for: "${project.title}"`);
+    const clampedStart = Math.max(0, startChunkId);
+    Logger.info(`Initiating audio streaming pipeline starting at Chunk #${clampedStart + 1} for: "${project.title}" (voice: ${voiceToUse?.name || project.voiceSettings.voiceId})`);
 
     const coordinator = new ChunkCoordinator(
       project.id,
       project.textContent,
-      project.voiceSettings.voiceId,
+      voiceToUse?.id || project.voiceSettings.voiceId,
       project.voiceSettings.rate,
       project.voiceSettings.pitch,
       project.voiceSettings.volume,
@@ -765,15 +831,15 @@ export function App() {
           activeChunkId: update.activeChunkId,
         });
       },
-      (firstChunk) => {
-        Logger.info(`Fast-start ready: streaming chunk 1 (${firstChunk.wordCount} words) in <400ms.`);
+      (targetChunk) => {
+        Logger.info(`Playback ready: Chunk #${targetChunk.id + 1} (${targetChunk.wordCount} words).`);
         isChunkStreamingRef.current = true;
-        currentChunkIndexRef.current = 0;
+        currentChunkIndexRef.current = targetChunk.id;
         chunksRef.current = coordinator.getChunks();
 
         // Estimated duration for entire document
         const stats = calculateTextStats(project.textContent);
-        const estDuration = stats.totalSeconds || firstChunk.duration;
+        const estDuration = stats.totalSeconds || targetChunk.duration;
         setDuration(estDuration);
 
         // Pre-populate cues for the whole text so user has full subtitle timeline immediately
@@ -782,8 +848,8 @@ export function App() {
 
         setProject((prev) => ({
           ...prev,
-          audioBlob: firstChunk.audioBlob,
-          audioUrl: firstChunk.audioUrl,
+          audioBlob: targetChunk.audioBlob,
+          audioUrl: targetChunk.audioUrl,
           cues: initialCues,
           playbackMemory: {
             ...prev.playbackMemory,
@@ -791,24 +857,29 @@ export function App() {
           },
         }));
 
-        if (audioRef.current && firstChunk.audioUrl) {
-          audioRef.current.src = firstChunk.audioUrl;
+        const intraOffset = Math.max(0, initialSeekTime - targetChunk.offsetSeconds);
+        if (audioRef.current && targetChunk.audioUrl) {
+          audioRef.current.src = targetChunk.audioUrl;
           audioRef.current.playbackRate = playbackSpeed;
           audioRef.current.volume = volume / 100;
-          audioRef.current.currentTime = 0;
+          audioRef.current.currentTime = intraOffset;
           audioRef.current
             .play()
             .then(() => {
               setIsPlaying(true);
-              Logger.info('Streaming audio playback started instantly!');
+              Logger.info(`Streaming audio playback started instantly from Chunk #${targetChunk.id + 1} at offset ${intraOffset.toFixed(1)}s!`);
             })
             .catch(() => {
-              // User browser autoplay policy: primed and ready to play on user click
               setIsPlaying(false);
             });
         }
-        setCurrentTime(0);
-        setActiveCueIndex(0);
+        setCurrentTime(initialSeekTime);
+        const activeIdx = targetCueIndex !== undefined ? targetCueIndex : initialCues.findIndex((c) => c.start >= initialSeekTime);
+        if (activeIdx !== -1) {
+          setActiveCueIndex(activeIdx);
+        }
+        triggerSeekSave(initialSeekTime, activeIdx !== -1 ? activeIdx : undefined);
+        preloadNextChunk(targetChunk.id + 1);
       },
       (chunk, allChunks) => {
         chunksRef.current = allChunks;
@@ -836,13 +907,13 @@ export function App() {
           preloadNextChunk(chunk.id);
         }
       },
-      selectedVoice
+      voiceToUse
     );
 
     coordinatorRef.current = coordinator;
 
     try {
-      const result = await coordinator.start();
+      const result = await coordinator.start(clampedStart);
 
       const finalDuration = result.combinedCues.length > 0
         ? result.combinedCues[result.combinedCues.length - 1].end
@@ -863,7 +934,9 @@ export function App() {
 
       setProject(updatedProject);
       await saveProject(updatedProject, true);
-      await refreshVoiceStatuses(project.id);
+      if (project.id) {
+        await refreshVoiceStatuses(project.id);
+      }
 
       // If playback is not active, seamlessly switch to combined audio URL for whole-file scrubbing
       if (!isPlaying && audioRef.current && result.combinedUrl) {
@@ -886,6 +959,11 @@ export function App() {
         refreshVoiceStatuses(project.id);
       }
     }
+  };
+
+  // Generate Audio via ChunkCoordinator with Fast Start & Shadow Pre-gen
+  const handleGenerateAudio = async () => {
+    await startAudioPipeline(currentChunkIndexRef.current || 0, currentTimeRef.current || 0);
   };
 
   // Force Stop Generation
@@ -1027,45 +1105,17 @@ export function App() {
 
   // Voice Switching with Multi-Voice Track Awareness & Resumable Status
   const handleVoiceChange = async (newVoice: VoiceModel) => {
+    const currentPos = currentTimeRef.current;
+
     if (isGenerating && coordinatorRef.current) {
       coordinatorRef.current.abort();
+      coordinatorRef.current = null;
       setIsGenerating(false);
     }
     stopAudio();
 
     const subpath = getVoiceFolderSubpath(newVoice);
-    const voiceStatus = voiceStatuses[subpath] || voiceStatuses[newVoice.id];
-
     Logger.info(`Switched active voice to "${newVoice.name}" (${newVoice.id}), subpath: ${subpath}`);
-
-    let newAudioUrl: string | undefined = undefined;
-    let newAudioBlob: Blob | undefined = undefined;
-
-    if (voiceStatus?.hasCombined && voiceStatus.combinedUrl) {
-      newAudioUrl = voiceStatus.combinedUrl;
-      isChunkStreamingRef.current = false;
-      if (audioRef.current) {
-        audioRef.current.src = voiceStatus.combinedUrl;
-        audioRef.current.playbackRate = playbackSpeed;
-        audioRef.current.volume = volume / 100;
-        audioRef.current.currentTime = 0;
-      }
-      setResumeNotification(`Voice switched to "${newVoice.name}". Full audio ready! Press Play.`);
-      setTimeout(() => setResumeNotification(null), 4000);
-    } else if (voiceStatus && voiceStatus.chunkCount > 0) {
-      const totalCh = splitTextIntoChunks(project.textContent, project.shadowSettings?.chunkSizeWords || 500).length;
-      setChunkProgress({
-        completedChunks: voiceStatus.chunkCount,
-        totalChunks: totalCh,
-        activeChunkId: voiceStatus.chunkCount,
-      });
-      setResumeNotification(`Voice switched to "${newVoice.name}". ${voiceStatus.chunkCount}/${totalCh} chunks generated. Press Generate to resume.`);
-      setTimeout(() => setResumeNotification(null), 5000);
-    } else {
-      setChunkProgress(null);
-      setResumeNotification(`Voice switched to "${newVoice.name}". Ready to generate speech.`);
-      setTimeout(() => setResumeNotification(null), 3000);
-    }
 
     const updatedProject: ProjectData = {
       ...project,
@@ -1073,12 +1123,67 @@ export function App() {
         ...project.voiceSettings,
         voiceId: newVoice.id,
       },
-      audioUrl: newAudioUrl,
-      audioBlob: newAudioBlob,
+      audioUrl: undefined,
+      audioBlob: undefined,
     };
-
     setProject(updatedProject);
     await saveProject(updatedProject, false);
+
+    if (!project.textContent || project.textContent.trim() === '') {
+      return;
+    }
+
+    // Fast-scan and hydrate cached chunks on disk for this voice
+    const tempCoordinator = new ChunkCoordinator(
+      project.id,
+      project.textContent,
+      newVoice.id,
+      project.voiceSettings.rate,
+      project.voiceSettings.pitch,
+      project.voiceSettings.volume,
+      project.shadowSettings,
+      () => {},
+      undefined,
+      undefined,
+      newVoice
+    );
+
+    const hydrated = await tempCoordinator.hydrateCachedChunks();
+    chunksRef.current = hydrated.chunks;
+    cuesRef.current = hydrated.cues;
+    setProject((p) => ({
+      ...p,
+      cues: hydrated.cues,
+      voiceSettings: { ...p.voiceSettings, voiceId: newVoice.id },
+    }));
+
+    // Find the chunk containing current playback timeline
+    let targetChunkId = 0;
+    for (let i = 0; i < hydrated.chunks.length; i++) {
+      const ch = hydrated.chunks[i];
+      const dur = ch.duration > 0 ? ch.duration : Math.max(3, ch.wordCount * 0.4);
+      if (currentPos >= ch.offsetSeconds && (currentPos < ch.offsetSeconds + dur || i === hydrated.chunks.length - 1)) {
+        targetChunkId = i;
+        break;
+      }
+    }
+
+    const targetChunk = hydrated.chunks[targetChunkId];
+    const isTargetReady = targetChunk && targetChunk.status === 'ready' && targetChunk.audioUrl;
+
+    const timeStr = `${Math.floor(currentPos / 60)}:${Math.floor(currentPos % 60).toString().padStart(2, '0')}`;
+    setResumeNotification(
+      `Voice switched to "${newVoice.name}" (${hydrated.readyCount}/${hydrated.totalCount} cached). ${
+        isTargetReady ? `Resuming at ${timeStr} (Chunk #${targetChunkId + 1})...` : `Synthesizing Chunk #${targetChunkId + 1}...`
+      }`
+    );
+    setTimeout(() => setResumeNotification(null), 4500);
+
+    // Automatically stream and synthesize starting from targetChunkId forward then backward!
+    startAudioPipeline(targetChunkId, currentPos, undefined, newVoice);
+    if (project.id) {
+      refreshVoiceStatuses(project.id);
+    }
   };
 
   // Project Switching Handlers
@@ -1370,6 +1475,20 @@ export function App() {
             setSettingsTargetProject(null);
             Logger.info(`Updated project settings for "${updated.title}"`);
           }}
+          onAudioCleaned={() => {
+            if (settingsTargetProject.id === project.id) {
+              setProject((prev) => ({
+                ...prev,
+                hasDiskAudio: false,
+                diskChunkCount: 0,
+                audioUrl: undefined,
+                audioBlob: undefined,
+              }));
+              if (project.id) {
+                refreshVoiceStatuses(project.id);
+              }
+            }
+          }}
         />
       )}
 
@@ -1471,6 +1590,28 @@ export function App() {
         onExportSrt={handleExportSrt}
         hasAudio={!!project.audioBlob}
         onOpenStorageSettings={() => setIsStorageModalOpen(true)}
+      />
+
+      {/* Audio Cleanup & Storage Recovery Modal */}
+      <ProjectCleanupModal
+        isOpen={isCleanupModalOpen}
+        onClose={() => setIsCleanupModalOpen(false)}
+        projectId={project.id}
+        projectTitle={project.title}
+        onCleaned={(freedMb) => {
+          setProject((p) => ({
+            ...p,
+            hasDiskAudio: false,
+            diskChunkCount: 0,
+            audioUrl: undefined,
+            audioBlob: undefined,
+          }));
+          if (project.id) {
+            refreshVoiceStatuses(project.id);
+          }
+          setResumeNotification(`🧹 Cleaned up audio files, freed ${freedMb} MB disk space.`);
+          setTimeout(() => setResumeNotification(null), 4000);
+        }}
       />
     </div>
   );
