@@ -61,6 +61,10 @@ export async function persistPlaybackMemory(projectId: string, memory: PlaybackM
   }
 }
 
+export async function setLastActiveProject(projectId: string): Promise<void> {
+  await set(LAST_ACTIVE_PROJECT_KEY, projectId);
+}
+
 export async function saveProject(project: ProjectData, persistAudio: boolean = false): Promise<void> {
   project.updatedAt = Date.now();
   
@@ -178,15 +182,14 @@ export async function getLastActiveProject(): Promise<ProjectData | null> {
 }
 
 export async function getAllProjects(): Promise<ProjectData[]> {
-  const projectMap = new Map<string, ProjectData>();
-
   // Wait for native desktop bridge so disk projects load reliably
   await DesktopBridge.ensureReady(1500);
 
-  // 1. Fetch from native disk if desktop
+  // 1. Fetch from native disk if desktop (Primary source of truth for current storage directory)
   if (DesktopBridge.isDesktop()) {
     try {
       const diskProjects = await DesktopBridge.loadAllProjectsFromDisk();
+      const projects: ProjectData[] = [];
       for (const p of diskProjects) {
         if (p.audioHttpUrl && !p.audioUrl) {
           p.audioUrl = p.audioHttpUrl;
@@ -198,14 +201,19 @@ export async function getAllProjects(): Promise<ProjectData[]> {
             concurrencyMode: 'auto',
           };
         }
-        projectMap.set(p.id, p);
+        projects.push(p);
+        // Cache to IndexedDB for quick access
+        await set(`${PROJECT_PREFIX}${p.id}`, p);
       }
+      projects.sort((a, b) => b.updatedAt - a.updatedAt);
+      return projects;
     } catch (e) {
       Logger.warn('Failed to load projects from disk:', e);
     }
   }
 
-  // 2. Fetch from IndexedDB and merge
+  // 2. Fetch from IndexedDB for web/mobile mode
+  const projectMap = new Map<string, ProjectData>();
   const allKeys = await keys();
   const projectKeys = allKeys.filter(
     (k) => typeof k === 'string' && k.startsWith(PROJECT_PREFIX)
@@ -224,10 +232,7 @@ export async function getAllProjects(): Promise<ProjectData[]> {
           concurrencyMode: 'auto',
         };
       }
-      // If not already in map from disk or newer, save
-      if (!projectMap.has(p.id) || p.updatedAt > (projectMap.get(p.id)?.updatedAt || 0)) {
-        projectMap.set(p.id, p);
-      }
+      projectMap.set(p.id, p);
     }
   }
 

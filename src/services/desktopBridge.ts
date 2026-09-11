@@ -5,6 +5,7 @@ export interface StorageInfo {
   exists: boolean;
   project_count: number;
   total_size_mb: number;
+  projects?: any[];
 }
 
 export interface VoiceTrackParams {
@@ -28,6 +29,7 @@ declare global {
         write_log?: (level: string, message: string) => Promise<boolean>;
         get_storage_info?: () => Promise<StorageInfo>;
         set_storage_dir?: (newDir: string) => Promise<StorageInfo>;
+        scan_storage_projects?: (path?: string) => Promise<any[]>;
         browse_storage_folder?: () => Promise<string | null>;
         open_storage_folder?: (subfolder?: string) => Promise<boolean>;
         save_project_to_disk?: (projectData: any) => Promise<boolean>;
@@ -236,6 +238,17 @@ export const DesktopBridge = {
       }
     }
     return null;
+  },
+
+  async scanStorageProjects(path?: string): Promise<any[]> {
+    if (window.pywebview?.api?.scan_storage_projects) {
+      try {
+        return await window.pywebview.api.scan_storage_projects(path);
+      } catch (e) {
+        console.warn('Failed to scan storage projects', e);
+      }
+    }
+    return [];
   },
 
   async browseStorageFolder(): Promise<string | null> {

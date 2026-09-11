@@ -22,6 +22,7 @@ import {
   savePlaybackProgress,
   loadPlaybackProgress,
   getLastActiveProject,
+  setLastActiveProject,
   getAllProjects,
   deleteProject,
   createDefaultProject,
@@ -1369,9 +1370,39 @@ export function App() {
       <StorageSettingsModal
         isOpen={isStorageModalOpen}
         onClose={() => setIsStorageModalOpen(false)}
-        onStorageChanged={async () => {
+        currentProjectId={project.id}
+        onStorageChanged={async (scannedProjects) => {
+          if (audioRef.current) {
+            audioRef.current.pause();
+            setIsPlaying(false);
+          }
           const all = await getAllProjects();
           setProjectsList(all);
+
+          // Auto-detect and use candidate project
+          const candidate = (scannedProjects && scannedProjects.length > 0)
+            ? scannedProjects[0]
+            : (all.length > 0 ? all[0] : null);
+
+          if (candidate) {
+            await setLastActiveProject(candidate.id);
+            await activateProject(candidate, false);
+            setResumeNotification(`Storage changed: Auto-loaded "${candidate.title}".`);
+            setTimeout(() => setResumeNotification(null), 5000);
+            Logger.info(`Storage location switched. Discovered ${all.length} project(s). Auto-loaded "${candidate.title}".`);
+          } else {
+            const def = createDefaultProject();
+            setProject(def);
+            setCurrentTime(0);
+            setDuration(0);
+            setActiveCueIndex(-1);
+            if (audioRef.current) {
+              audioRef.current.src = '';
+            }
+            setResumeNotification('Storage location switched: No existing projects found in this folder.');
+            setTimeout(() => setResumeNotification(null), 5000);
+            Logger.info('Storage location switched. No existing projects found.');
+          }
         }}
       />
 

@@ -121,35 +121,144 @@ class DesktopApi:
             print(f"Read config error: {e}")
         return DEFAULT_STORAGE_DIR
 
-    def get_storage_info(self) -> dict:
-        """Returns storage folder status, disk path, project count and total size in MB"""
-        s_dir = self.get_storage_dir()
-        projects_dir = os.path.join(s_dir, "projects")
-        os.makedirs(projects_dir, exist_ok=True)
+    def _find_project_dir(self, project_id: str) -> str:
+        """Finds existing project directory anywhere in storage_dir, or defaults to <storage_dir>/projects/<project_id>"""
+        base = self.get_storage_dir()
+        # 1. Standard location: <base>/projects/<project_id>
+        p1 = os.path.join(base, "projects", project_id)
+        if os.path.isdir(p1) and os.path.exists(os.path.join(p1, "project.json")):
+            return p1
+        # 2. Direct folder: <base>/<project_id>
+        p2 = os.path.join(base, project_id)
+        if os.path.isdir(p2) and os.path.exists(os.path.join(p2, "project.json")):
+            return p2
+        # 3. Recursive search (up to 3 levels deep)
+        if os.path.isdir(base):
+            for root, dirs, files in os.walk(base):
+                depth = len(os.path.relpath(root, base).split(os.sep))
+                if depth > 3:
+                    del dirs[:]
+                    continue
+                if "project.json" in files:
+                    try:
+                        with open(os.path.join(root, "project.json"), "r", encoding="utf-8") as f:
+                            p_data = json.load(f)
+                            if p_data.get("id") == project_id:
+                                return root
+                    except Exception:
+                        pass
+        return p1
 
-        project_count = 0
+    def _scan_directory_for_projects(self, base_dir: str) -> list:
+        """Thoroughly scans base_dir for any existing projects in standard or custom folder structures"""
+        projects = []
+        seen_ids = set()
+
+        if not base_dir or not os.path.exists(base_dir):
+            return []
+
+        def process_project_file(json_file_path: str, proj_folder: str):
+            try:
+                if not os.path.isfile(json_file_path):
+                    return
+                with open(json_file_path, "r", encoding="utf-8") as f:
+                    p_data = json.load(f)
+
+                pid = p_data.get("id")
+                if not pid or pid in seen_ids:
+                    return
+
+                # Check if combined audio exists directly or in subpaths
+                mp3_path = os.path.join(proj_folder, "combined.mp3")
+                has_combined = os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0
+
+                total_chunks = 0
+                for root, _, files in os.walk(proj_folder):
+                    for fl in files:
+                        if fl.endswith(".mp3"):
+                            total_chunks += 1
+                            if not has_combined and fl == "combined.mp3":
+                                mp3_path = os.path.join(root, fl)
+                                has_combined = True
+
+                rel_proj = os.path.relpath(proj_folder, base_dir).replace("\\", "/")
+                if has_combined and os.path.exists(mp3_path):
+                    mtime = int(os.path.getmtime(mp3_path))
+                    rel_mp3 = os.path.relpath(mp3_path, base_dir).replace("\\", "/").lstrip("/")
+                    if not rel_mp3.startswith("projects/"):
+                        rel_mp3 = f"projects/{rel_mp3}"
+                    p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/{rel_mp3}?t={mtime}"
+
+                p_data["hasDiskAudio"] = has_combined or total_chunks > 0
+                p_data["diskChunkCount"] = total_chunks
+                seen_ids.add(pid)
+                projects.append(p_data)
+            except Exception as err:
+                print(f"Error scanning project at {json_file_path}: {err}")
+
+        # 1. Standard: base_dir/projects/<folder>/project.json
+        p_sub = os.path.join(base_dir, "projects")
+        if os.path.isdir(p_sub):
+            for item in os.listdir(p_sub):
+                ip = os.path.join(p_sub, item)
+                if os.path.isdir(ip):
+                    process_project_file(os.path.join(ip, "project.json"), ip)
+
+        # 2. Direct: base_dir/<folder>/project.json
+        if os.path.isdir(base_dir):
+            for item in os.listdir(base_dir):
+                if item == "projects":
+                    continue
+                ip = os.path.join(base_dir, item)
+                if os.path.isdir(ip):
+                    process_project_file(os.path.join(ip, "project.json"), ip)
+
+        # 3. Root: base_dir/project.json
+        root_pj = os.path.join(base_dir, "project.json")
+        if os.path.isfile(root_pj):
+            process_project_file(root_pj, base_dir)
+
+        # 4. Deep search (up to 3 levels) for any remaining project.json
+        for root, dirs, files in os.walk(base_dir):
+            depth = len(os.path.relpath(root, base_dir).split(os.sep))
+            if depth > 3:
+                del dirs[:]
+                continue
+            if "project.json" in files:
+                process_project_file(os.path.join(root, "project.json"), root)
+
+        projects.sort(key=lambda x: x.get("updatedAt", 0), reverse=True)
+        return projects
+
+    def get_storage_info(self) -> dict:
+        """Returns storage folder status, disk path, project count, total size in MB, and scanned projects"""
+        s_dir = self.get_storage_dir()
+        projects = self._scan_directory_for_projects(s_dir)
+
         total_bytes = 0
         try:
-            for root, dirs, files in os.walk(projects_dir):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    total_bytes += os.path.getsize(fp)
-            project_count = len([d for d in os.listdir(projects_dir) if os.path.isdir(os.path.join(projects_dir, d))])
+            if os.path.exists(s_dir):
+                for root, dirs, files in os.walk(s_dir):
+                    for f in files:
+                        fp = os.path.join(root, f)
+                        total_bytes += os.path.getsize(fp)
         except Exception as e:
             print(f"Storage info error: {e}")
 
         return {
             "storage_dir": s_dir,
             "exists": os.path.exists(s_dir),
-            "project_count": project_count,
-            "total_size_mb": round(total_bytes / (1024 * 1024), 2)
+            "project_count": len(projects),
+            "total_size_mb": round(total_bytes / (1024 * 1024), 2),
+            "projects": projects
         }
 
     def set_storage_dir(self, new_dir: str) -> dict:
-        """Updates storage directory in config.json and migrates or ensures folder exists"""
+        """Updates storage directory in config.json, auto-scans existing projects, and returns updated info"""
         try:
             if not new_dir or not os.path.isabs(new_dir):
                 return self.get_storage_info()
+            new_dir = os.path.normpath(new_dir)
             os.makedirs(new_dir, exist_ok=True)
             os.makedirs(os.path.join(new_dir, "projects"), exist_ok=True)
 
@@ -157,11 +266,17 @@ class DesktopApi:
             with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
 
-            self.write_log("info", f"Project storage directory changed to: {new_dir}")
-            return self.get_storage_info()
+            info = self.get_storage_info()
+            self.write_log("info", f"Project storage directory changed to: {new_dir} (Auto-scanned & found {info.get('project_count', 0)} projects)")
+            return info
         except Exception as e:
             self.write_log("error", f"Failed to set storage directory: {e}")
             return self.get_storage_info()
+
+    def scan_storage_projects(self, path: str = None) -> list:
+        """Explicitly scans a given path (or current storage_dir) for existing projects"""
+        target = os.path.normpath(path) if path and os.path.isabs(path) else self.get_storage_dir()
+        return self._scan_directory_for_projects(target)
 
     def browse_storage_folder(self) -> str | None:
         """Opens native Windows folder picker dialog for user to select storage destination"""
@@ -172,7 +287,7 @@ class DesktopApi:
             # Dialog returns list of chosen paths
             chosen = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory=current)
             if chosen and len(chosen) > 0:
-                selected_path = chosen[0]
+                selected_path = os.path.normpath(chosen[0])
                 self.set_storage_dir(selected_path)
                 return selected_path
         except Exception as e:
@@ -204,7 +319,7 @@ class DesktopApi:
             if not pid:
                 return False
 
-            p_dir = os.path.join(self.get_storage_dir(), "projects", pid)
+            p_dir = self._find_project_dir(pid)
             os.makedirs(p_dir, exist_ok=True)
             os.makedirs(os.path.join(p_dir, "chunks"), exist_ok=True)
 
@@ -226,7 +341,7 @@ class DesktopApi:
     def update_project_playback_memory(self, project_id: str, memory: dict) -> bool:
         """Lightweight and atomic: Updates only the playbackMemory field in project.json on disk"""
         try:
-            p_dir = os.path.join(self.get_storage_dir(), "projects", project_id)
+            p_dir = self._find_project_dir(project_id)
             json_path = os.path.join(p_dir, "project.json")
             if not os.path.exists(json_path):
                 return False
@@ -246,55 +361,17 @@ class DesktopApi:
             return False
 
     def load_all_projects_from_disk(self) -> list:
-        """Loads list of all projects found on disk"""
-        projects = []
+        """Loads list of all projects found on disk by auto-scanning the storage directory"""
         try:
-            p_dir = os.path.join(self.get_storage_dir(), "projects")
-            if not os.path.exists(p_dir):
-                return []
-
-            for folder in os.listdir(p_dir):
-                fp = os.path.join(p_dir, folder, "project.json")
-                if os.path.isfile(fp):
-                    try:
-                        with open(fp, "r", encoding="utf-8") as f:
-                            p_data = json.load(f)
-                            proj_path = os.path.join(p_dir, folder)
-
-                            # Check if combined audio exists directly
-                            mp3_path = os.path.join(proj_path, "combined.mp3")
-                            has_combined = os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0
-                            if has_combined:
-                                mtime = int(os.path.getmtime(mp3_path))
-                                p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/projects/{folder}/combined.mp3?t={mtime}"
-
-                            # Also check voice subpaths and chunk files
-                            total_chunks = 0
-                            for root, _, files in os.walk(proj_path):
-                                for fl in files:
-                                    if fl.endswith(".mp3"):
-                                        total_chunks += 1
-                                        if not has_combined and fl == "combined.mp3":
-                                            rel = os.path.relpath(os.path.join(root, fl), proj_path).replace("\\", "/")
-                                            mtime = int(os.path.getmtime(os.path.join(root, fl)))
-                                            p_data["audioHttpUrl"] = f"http://127.0.0.1:{self._media_port}/projects/{folder}/{rel}?t={mtime}"
-                                            has_combined = True
-
-                            p_data["hasDiskAudio"] = has_combined or total_chunks > 0
-                            p_data["diskChunkCount"] = total_chunks
-                            projects.append(p_data)
-                    except Exception as err:
-                        print(f"Error loading {fp}: {err}")
-
-            projects.sort(key=lambda x: x.get("updatedAt", 0), reverse=True)
+            return self._scan_directory_for_projects(self.get_storage_dir())
         except Exception as e:
             self.write_log("error", f"Error loading projects from disk: {e}")
-        return projects
+            return []
 
     def load_project_from_disk(self, project_id: str):
         """Loads a single project from disk, including its combined MP3 streaming HTTP URL if available"""
         try:
-            p_dir = os.path.join(self.get_storage_dir(), "projects", project_id)
+            p_dir = self._find_project_dir(project_id)
             json_path = os.path.join(p_dir, "project.json")
             if not os.path.exists(json_path):
                 return None
@@ -386,9 +463,10 @@ class DesktopApi:
 
     def _get_voice_dir(self, project_id: str, voice_subpath: str = "") -> str:
         """Returns absolute path to project's voice directory"""
+        p_dir = self._find_project_dir(project_id)
         if voice_subpath:
-            return os.path.join(self.get_storage_dir(), "projects", project_id, voice_subpath)
-        return os.path.join(self.get_storage_dir(), "projects", project_id)
+            return os.path.join(p_dir, voice_subpath)
+        return p_dir
 
     def save_chunk_audio(self, project_id: str, chunk_id: int, base64_data: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None, cues: list = None, duration: float = None) -> bool:
         """Saves a chunk's MP3 audio and synchronized cues to disk: <project_id>/<voice_subpath>/chunks/chunk_<id>.mp3"""
@@ -445,7 +523,7 @@ class DesktopApi:
         and deep discovery across voice subdirectories.
         Returns (abs_path, relative_url_path).
         """
-        p_base = os.path.join(self.get_storage_dir(), "projects", project_id)
+        p_base = self._find_project_dir(project_id)
         if not os.path.exists(p_base):
             return None, ""
 
@@ -535,7 +613,7 @@ class DesktopApi:
     def get_combined_audio_url(self, project_id: str, voice_id: str = None, voice_locale: str = None, voice_gender: str = None, voice_name: str = None) -> str | None:
         """Returns HTTP streaming URL for a project's combined MP3"""
         try:
-            p_base = os.path.join(self.get_storage_dir(), "projects", project_id)
+            p_base = self._find_project_dir(project_id)
             if not os.path.exists(p_base):
                 return None
 
@@ -583,7 +661,7 @@ class DesktopApi:
         """
         results = {}
         try:
-            p_dir = os.path.join(self.get_storage_dir(), "projects", project_id)
+            p_dir = self._find_project_dir(project_id)
             if not os.path.exists(p_dir):
                 return {}
 
@@ -652,7 +730,7 @@ class DesktopApi:
     def delete_project_from_disk(self, project_id: str) -> bool:
         """Deletes the project folder and all its audio files from disk"""
         try:
-            p_dir = os.path.join(self.get_storage_dir(), "projects", project_id)
+            p_dir = self._find_project_dir(project_id)
             if os.path.exists(p_dir):
                 shutil.rmtree(p_dir, ignore_errors=True)
                 self.write_log("info", f"Deleted project folder from disk: {p_dir}")

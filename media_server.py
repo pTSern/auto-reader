@@ -71,7 +71,34 @@ class MediaServerHandler(BaseHTTPRequestHandler):
             if not base_storage or not os.path.exists(base_storage):
                 self.send_error(500, "Storage Directory Not Initialized")
                 return
+            # 1. Standard: base_storage/projects/...
             file_path = os.path.abspath(os.path.join(base_storage, clean_path))
+
+            # 2. Fallback: base_storage/<clean_path without 'projects/'> (if user selected project root directly)
+            if not os.path.isfile(file_path):
+                sub_rel = re.sub(r'^projects[\\/]', '', clean_path)
+                alt_path = os.path.abspath(os.path.join(base_storage, sub_rel))
+                if os.path.isfile(alt_path) and alt_path.startswith(os.path.abspath(base_storage)):
+                    file_path = alt_path
+
+            # 3. Fallback: deep search for target project_id folder within base_storage
+            if not os.path.isfile(file_path):
+                sub_rel = re.sub(r'^projects[\\/]', '', clean_path)
+                parts = [p for p in sub_rel.replace("\\", "/").split("/") if p]
+                if len(parts) >= 2:
+                    target_pid = parts[0]
+                    rest = os.sep.join(parts[1:])
+                    for root, dirs, _ in os.walk(base_storage):
+                        depth = len(os.path.relpath(root, base_storage).split(os.sep))
+                        if depth > 3:
+                            del dirs[:]
+                            continue
+                        if os.path.basename(root) == target_pid:
+                            candidate = os.path.abspath(os.path.join(root, rest))
+                            if os.path.isfile(candidate) and candidate.startswith(os.path.abspath(base_storage)):
+                                file_path = candidate
+                                break
+
             if not file_path.startswith(os.path.abspath(base_storage)):
                 self.send_error(403, "Forbidden Path")
                 return
